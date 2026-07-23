@@ -1,30 +1,11 @@
-qt.qpa.fonts: Populating font family aliases took 60 ms. Replace uses of missing font family "微软雅黑" with one that exists to avoid this cost. 
+qt.qpa.fonts: Populating font family aliases took 165 ms. Replace uses of missing font family "微软雅黑" with one that exists to avoid this cost. 
 
 [1;33m📢 Tips:[0m QFluentWidgets Pro is now released. Click [1;96mhttps://qfluentwidgets.com/pages/pro[0m to learn more about it.
 
-2026-07-23 00:05:27.003 | INFO | RiskEngine | 风控规则[ActiveOrderRule]加载成功，模块：vnpy_riskmanager.rules.active_order_rule_cy
-2026-07-23 00:05:27.003 | INFO | RiskEngine | 风控规则[DuplicateOrderRule]加载成功，模块：vnpy_riskmanager.rules.duplicate_order_rule_cy
-2026-07-23 00:05:27.003 | INFO | RiskEngine | 风控规则[OrderValidityRule]加载成功，模块：vnpy_riskmanager.rules.order_validity_rule_cy
-2026-07-23 00:05:27.003 | INFO | RiskEngine | 风控规则[DailyLimitRule]加载成功，模块：vnpy_riskmanager.rules.daily_limit_rule_cy
-2026-07-23 00:05:27.003 | INFO | RiskEngine | 风控规则[OrderSizeRule]加载成功，模块：vnpy_riskmanager.rules.order_size_rule_cy
+2026-07-23 01:17:59.652 | INFO | RiskEngine | 风控规则[ActiveOrderRule]加载成功，模块：vnpy_riskmanager.rules.active_order_rule_cy
+2026-07-23 01:17:59.652 | INFO | RiskEngine | 风控规则[DuplicateOrderRule]加载成功，模块：vnpy_riskmanager.rules.duplicate_order_rule_cy
+2026-07-23 01:17:59.653 | INFO | RiskEngine | 风控规则[OrderValidityRule]加载成功，模块：vnpy_riskmanager.rules.order_validity_rule_cy
+2026-07-23 01:17:59.653 | INFO | RiskEngine | 风控规则[DailyLimitRule]加载成功，模块：vnpy_riskmanager.rules.daily_limit_rule_cy
+2026-07-23 01:17:59.653 | INFO | RiskEngine | 风控规则[OrderSizeRule]加载成功，模块：vnpy_riskmanager.rules.order_size_rule_cy
 没有配置要使用的数据服务，请修改全局配置中的datafeed相关内容
-2026-07-23 00:05:27.143 | INFO | CtaStrategy | CTA策略引擎初始化成功
-2026-07-23 00:05:49.893 Python[98671:52217804] error messaging the mach port for IMKCFRunLoopWakeUpReliable
-2026-07-23 00:40:05.857 | INFO | MainEngine | 连接登录 -> FUTU
-2026-07-23 00:40:05,861 | 98671 | 6169407488 | [open_context_base.py:411] _init_connect_sync: New connect ready: conn=7485916628581611700(1) context=<futu.quote.open_quote_context.OpenQuoteContext object at 0x156361010>
-2026-07-23 00:40:05.861 | INFO | FUTU | 行情连接成功
-2026-07-23 00:40:05,866 | 98671 | 6169407488 | [open_context_base.py:411] _init_connect_sync: New connect ready: conn=7485916628594339710(2) context=<futu.trade.open_trade_context.OpenSecTradeContext object at 0x156362510>
-2026-07-23 00:40:05.873 | INFO | FUTU | SEHK 交易连接成功
-2026-07-23 00:40:05,874 | 98671 | 6169407488 | [open_context_base.py:411] _init_connect_sync: New connect ready: conn=7485916628646607346(3) context=<futu.trade.open_trade_context.OpenSecTradeContext object at 0x1563d47d0>
-2026-07-23 00:40:05.876 | INFO | FUTU | SMART 交易连接成功
-2026-07-23 00:40:06.111 | INFO | FUTU | SEHK 合约查询完成,共 3781 只
-2026-07-23 00:40:06.776 | INFO | FUTU | SMART 合约查询完成,共 13036 只
-2026-07-23 00:40:06.972 | INFO | FUTU | SSE 合约查询完成,共 2372 只
-2026-07-23 00:40:07.157 | INFO | FUTU | SZSE 合约查询完成,共 2965 只
-2026-07-23 00:40:07.159 | INFO | FUTU | 查询 SEHK 账户失败: No available real accounts with HK market authority in Unknown security, please check the input parameters 'security_firm' and 'filter_trdmarket' of OpenSecTradeContext.
-2026-07-23 00:40:07.160 | INFO | FUTU | 查询 SMART 账户失败: No available real accounts with US market authority in Unknown security, please check the input parameters 'security_firm' and 'filter_trdmarket' of OpenSecTradeContext.
-2026-07-23 00:40:07.161 | INFO | FUTU | 查询 SEHK 持仓失败: No available real accounts with HK market authority in Unknown security, please check the input parameters 'security_firm' and 'filter_trdmarket' of OpenSecTradeContext.
-2026-07-23 00:40:07.162 | INFO | FUTU | 查询 SMART 持仓失败: No available real accounts with US market authority in Unknown security, please check the input parameters 'security_firm' and 'filter_trdmarket' of OpenSecTradeContext.
-2026-07-23 00:40:18.118 Python[98671:52217804] TSM AdjustCapsLockLEDForKeyTransitionHandling - _ISSetPhysicalKeyboardCapsLockLED Inhibit
-2026-07-23 00:43:21.427 | INFO | MainEngine | 查询K线 -> FUTU：HistoryRequest(symbol='700', exchange=<Exchange.SEHK: 'SEHK'>, start=datetime.datetime(2026, 7, 22, 16, 0), end=datetime.datetime(2026, 7, 23, 0, 43, 21, 427418, tzinfo=zoneinfo.ZoneInfo(key='America/New_York')), interval=<Interval.MINUTE: '1m'>)
-2026-07-23 00:43:30.004 Python[98671:52217804] TSMSendMessageToUIServer: CFMessagePortSendRequest FAILED(-1) to send to port com.apple.tsm.uiserver
+2026-07-23 01:17:59.939 | INFO | CtaStrategy | CTA策略引擎初始化成功

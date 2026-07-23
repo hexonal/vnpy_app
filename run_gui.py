@@ -54,12 +54,31 @@ def main() -> None:
 
     main_engine.add_gateway(FutuGateway)
 
+    # Load order matters here — both RiskManagerApp and PaperAccountApp
+    # monkey-patch main_engine.send_order (see vnpy_riskmanager.engine.
+    # RiskEngine.patch_functions() and vnpy_paperaccount.engine.PaperEngine
+    # .__init__). RiskEngine *wraps* whatever send_order was at patch time
+    # (captures it as self._send_order, calls it only after its own checks
+    # pass); PaperEngine does NOT chain — it unconditionally replaces
+    # send_order with its own simulated-fill version and never forwards to
+    # whatever was patched in before it (correct: paper trading must never
+    # reach a real gateway).
+    #
+    # PaperAccountApp must load FIRST so RiskManagerApp's patch — applied
+    # second — wraps PaperEngine's send_order. That makes the chain
+    # main_engine.send_order -> RiskEngine.send_order (checks rules) ->
+    # PaperEngine.send_order (simulated fill), so a rule that fails blocks
+    # a paper order the same way it would block a real one. Loading them
+    # in the reverse order (as this file did previously) makes
+    # PaperAccountApp's patch win and RiskManagerApp's rules never run —
+    # confirmed by reading both patch_functions()/__init__() rather than
+    # assumed.
+    main_engine.add_app(PaperAccountApp)
     main_engine.add_app(RiskManagerApp)
     main_engine.add_app(CtaStrategyApp)
     main_engine.add_app(CtaBacktesterApp)
     main_engine.add_app(DataManagerApp)
     main_engine.add_app(ChartWizardApp)
-    main_engine.add_app(PaperAccountApp)
 
     main_window = FluentMainWindow(main_engine, event_engine)
     main_window.showMaximized()
