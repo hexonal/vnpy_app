@@ -1,0 +1,41 @@
+[RiskEngine] 风控规则[ActiveOrderRule]加载成功，模块：vnpy_riskmanager.rules.active_order_rule_cy
+2026-07-22 20:24:33.858 | INFO | RiskEngine | 风控规则[ActiveOrderRule]加载成功，模块：vnpy_riskmanager.rules.active_order_rule_cy
+[RiskEngine] 风控规则[DuplicateOrderRule]加载成功，模块：vnpy_riskmanager.rules.duplicate_order_rule_cy
+2026-07-22 20:24:33.859 | INFO | RiskEngine | 风控规则[DuplicateOrderRule]加载成功，模块：vnpy_riskmanager.rules.duplicate_order_rule_cy
+[RiskEngine] 风控规则[OrderValidityRule]加载成功，模块：vnpy_riskmanager.rules.order_validity_rule_cy
+2026-07-22 20:24:33.859 | INFO | RiskEngine | 风控规则[OrderValidityRule]加载成功，模块：vnpy_riskmanager.rules.order_validity_rule_cy
+[RiskEngine] 风控规则[DailyLimitRule]加载成功，模块：vnpy_riskmanager.rules.daily_limit_rule_cy
+2026-07-22 20:24:33.859 | INFO | RiskEngine | 风控规则[DailyLimitRule]加载成功，模块：vnpy_riskmanager.rules.daily_limit_rule_cy
+[RiskEngine] 风控规则[OrderSizeRule]加载成功，模块：vnpy_riskmanager.rules.order_size_rule_cy
+2026-07-22 20:24:33.860 | INFO | RiskEngine | 风控规则[OrderSizeRule]加载成功，模块：vnpy_riskmanager.rules.order_size_rule_cy
+[MainEngine] Connect gateway -> FUTU
+2026-07-22 20:24:33.860 | INFO | MainEngine | Connect gateway -> FUTU
+2026-07-22 20:24:33,869 | 41882 | 8473304448 | [open_context_base.py:411] _init_connect_sync: New connect ready: conn=7485852321541896596(1) context=<futu.quote.open_quote_context.OpenQuoteContext object at 0x10c64f8c0>
+[FUTU] 行情连接成功
+2026-07-22 20:24:33.870 | INFO | FUTU | 行情连接成功
+2026-07-22 20:24:33,871 | 41882 | 8473304448 | [open_context_base.py:411] _init_connect_sync: New connect ready: conn=7485852321558907444(2) context=<futu.trade.open_trade_context.OpenSecTradeContext object at 0x10c7c4d70>
+[FUTU] SEHK 交易连接成功
+2026-07-22 20:24:33.891 | INFO | FUTU | SEHK 交易连接成功
+2026-07-22 20:24:33,898 | 41882 | 8473304448 | [open_context_base.py:411] _init_connect_sync: New connect ready: conn=7485852321642930401(3) context=<futu.trade.open_trade_context.OpenSecTradeContext object at 0x10c646350>
+[FUTU] SMART 交易连接成功
+2026-07-22 20:24:33.900 | INFO | FUTU | SMART 交易连接成功
+[MAIN] AgentBridge MCP server starting on http://127.0.0.1:8765/mcp
+
+
+╭──────────────────────────────────────────────────────────────────────────────╮
+│                                                                              │
+│                                                                              │
+│                         ▄▀▀ ▄▀█ █▀▀ ▀█▀ █▀▄▀█ █▀▀ █▀█                        │
+│                         █▀  █▀█ ▄▄█  █  █ ▀ █ █▄▄ █▀▀                        │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                FastMCP 3.4.4                                 │
+│                            https://gofastmcp.com                             │
+│                                                                              │
+│                  🖥  Server:      vnpy-agentbridge, 3.4.4                     │
+│                  🚀 Deploy free: https://horizon.prefect.io                  │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+

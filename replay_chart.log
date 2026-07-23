@@ -1,0 +1,3 @@
+qt.qpa.fonts: Populating font family aliases took 73 ms. Replace uses of missing font family "微软雅黑" with one that exists to avoid this cost. 
+2026-07-22 21:06:21.254 Python[6966:51745992] TSM AdjustCapsLockLEDForKeyTransitionHandling - _ISSetPhysicalKeyboardCapsLockLED Inhibit
+2026-07-22 21:06:23.734 Python[6966:51745992] error messaging the mach port for IMKCFRunLoopWakeUpReliable
