@@ -198,6 +198,56 @@ def test_mark_extended_sessions_bands_only_over_night_runs() -> None:
     _assert("no bands for HK (no night session)", len(plot2.added) == 0)
 
 
+class _FakeSymbolCombo:
+    def __init__(self) -> None:
+        self.items: list[str] = []
+
+    def clear(self) -> None:
+        self.items = []
+
+    def addItems(self, xs) -> None:
+        self.items.extend(xs)
+
+    def addItem(self, x) -> None:
+        self.items.append(x)
+
+
+def test_market_filter_narrows_symbol_picker_by_exchange() -> None:
+    from fluent_ui.chart_wizard import _MARKETS
+    known = {"1.SEHK", "700.SEHK", "AAPL.SMART", "MU.SMART", "600000.SSE", "000001.SZSE"}
+    fake = SimpleNamespace(
+        _market_filter=None,
+        _known_symbols=set(known),
+        symbol_line=_FakeSymbolCombo(),
+    )
+    fake._vt_exchange = ChartWizardWidget._vt_exchange  # staticmethod
+    for name in ("_matches_market", "_rebuild_symbol_list", "_on_market_changed", "_add_symbol_if_new"):
+        setattr(fake, name, MethodType(getattr(ChartWizardWidget, name), fake))
+
+    labels = [m[0] for m in _MARKETS]
+    _assert("markets are 全部/港股/美股/沪市/深市", labels == ["全部", "港股", "美股", "沪市", "深市"])
+
+    fake._on_market_changed(2)  # 美股 (SMART)
+    _assert("美股 shows only SMART", fake.symbol_line.items == ["AAPL.SMART", "MU.SMART"])
+
+    fake._on_market_changed(1)  # 港股 (SEHK)
+    _assert("港股 shows only SEHK", fake.symbol_line.items == ["1.SEHK", "700.SEHK"])
+
+    fake._on_market_changed(0)  # 全部
+    _assert("全部 shows every known symbol", len(fake.symbol_line.items) == 6)
+
+    # A new SMART contract streaming in while 全部 is active is shown...
+    fake._add_symbol_if_new("NVDA.SMART")
+    _assert("new symbol shown under 全部", "NVDA.SMART" in fake.symbol_line.items)
+    # ...but while 港股 is active, a new US contract is recorded, not shown.
+    fake._on_market_changed(1)  # 港股
+    fake._add_symbol_if_new("TSLA.SMART")
+    _assert("US contract recorded under 港股 filter", "TSLA.SMART" in fake._known_symbols)
+    _assert("US contract hidden under 港股 filter", "TSLA.SMART" not in fake.symbol_line.items)
+    fake._on_market_changed(2)  # back to 美股 → now it surfaces
+    _assert("hidden US contract surfaces on switch to 美股", "TSLA.SMART" in fake.symbol_line.items)
+
+
 def main() -> None:
     tests = [
         test_clicking_period_reloads_active_chart,
@@ -205,6 +255,7 @@ def main() -> None:
         test_tab_switch_syncs_period_strip,
         test_period_click_with_no_open_chart_is_safe,
         test_mark_extended_sessions_bands_only_over_night_runs,
+        test_market_filter_narrows_symbol_picker_by_exchange,
     ]
     for t in tests:
         print(t.__name__)

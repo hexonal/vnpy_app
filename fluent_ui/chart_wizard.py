@@ -46,7 +46,7 @@ from copy import copy
 from datetime import datetime, timedelta
 
 import pyqtgraph as pg
-from qfluentwidgets import CalendarPicker, MessageBox, PushButton, SegmentedWidget
+from qfluentwidgets import CalendarPicker, ComboBox, MessageBox, PushButton, SegmentedWidget
 from tzlocal import get_localzone_name
 
 from vnpy.chart import ChartWidget, VolumeItem
@@ -87,6 +87,19 @@ _PERIOD_BY_LABEL: dict[str, tuple[Interval, int]] = {
 from .market_session import is_extended
 from .searchable_combo_box import SearchableComboBox
 from .session_candle import SessionCandleItem
+
+# Exchange filter for the symbol picker: (label, vt_symbol suffix). A None
+# suffix is 全部 (no filter). The suffixes are the vt_symbol exchange parts
+# FutuGateway serves (see FutuGateway.exchanges: SEHK/SMART/SSE/SZSE), so
+# the numeric HK codes and alphabetic US tickers can be browsed separately
+# instead of drowning in one ~22k-symbol list.
+_MARKETS: list[tuple[str, str | None]] = [
+    ("全部", None),
+    ("港股", "SEHK"),
+    ("美股", "SMART"),
+    ("沪市", "SSE"),
+    ("深市", "SZSE"),
+]
 
 
 class ChartWizardWidget(QtWidgets.QWidget):
@@ -132,6 +145,9 @@ class ChartWizardWidget(QtWidgets.QWidget):
         # FutuGateway pushing ~22k contracts on connect, findText-based
         # dedupe is Σi ≈ n²/2 ≈ 2×10⁸ comparisons during the burst.
         self._known_symbols: set[str] = set()
+        # Current exchange filter for the symbol picker (a vt_symbol suffix,
+        # or None for 全部). Only symbols matching it are shown in the combo.
+        self._market_filter: str | None = None
 
         self.init_ui()
         self.register_event()
@@ -144,6 +160,15 @@ class ChartWizardWidget(QtWidgets.QWidget):
         self.tab.tabCloseRequested.connect(self.close_tab)
         # Switching tabs re-syncs the period strip to that chart's period.
         self.tab.currentChanged.connect(self._on_tab_changed)
+
+        # Market/exchange filter — narrows the symbol picker to one exchange
+        # so US tickers (alphabetic) aren't buried under ~17k HK/CN numeric
+        # codes. 全部 shows everything (default).
+        self.market_combo = ComboBox()
+        for label, _suffix in _MARKETS:
+            self.market_combo.addItem(label)
+        self.market_combo.setCurrentIndex(0)
+        self.market_combo.currentIndexChanged.connect(self._on_market_changed)
 
         self.symbol_line = SearchableComboBox()
         self.symbol_line.setPlaceholderText(_("输入代码搜索本地已知合约，或直接输入新代码"))
@@ -185,7 +210,9 @@ class ChartWizardWidget(QtWidgets.QWidget):
         self.button.clicked.connect(self.new_chart)
 
         hbox = QtWidgets.QHBoxLayout()
-        hbox.addWidget(QtWidgets.QLabel(_("本地代码")))
+        hbox.addWidget(QtWidgets.QLabel(_("市场")))
+        hbox.addWidget(self.market_combo)
+        hbox.addWidget(QtWidgets.QLabel(_("代码")))
         hbox.addWidget(self.symbol_line)
         hbox.addWidget(self.period_pivot)
         hbox.addWidget(QtWidgets.QLabel(_("起")))
@@ -370,6 +397,15 @@ class ChartWizardWidget(QtWidgets.QWidget):
         contract: ContractData = event.data
         self._add_symbol_if_new(contract.vt_symbol)
 
+    @staticmethod
+    def _vt_exchange(vt_symbol: str) -> str:
+        """The exchange suffix of a vt_symbol ('AAPL.SMART' -> 'SMART')."""
+        return vt_symbol.rsplit(".", 1)[-1]
+
+    def _matches_market(self, vt_symbol: str) -> bool:
+        """Whether a symbol belongs in the picker under the current filter."""
+        return self._market_filter is None or self._vt_exchange(vt_symbol) == self._market_filter
+
     def _add_symbol_if_new(self, vt_symbol: str) -> None:
         # EVENT_CONTRACT fires once per contract per query — a gateway
         # reconnect (or a second connect() to a different market) re-fires
@@ -378,7 +414,27 @@ class ChartWizardWidget(QtWidgets.QWidget):
         # init comment for why the linear scan was an O(n²) burst.
         if vt_symbol not in self._known_symbols:
             self._known_symbols.add(vt_symbol)
-            self.symbol_line.addItem(vt_symbol)
+            # Only show it if it matches the current market filter; it's
+            # still recorded in _known_symbols so switching the filter later
+            # surfaces it (via _rebuild_symbol_list).
+            if self._matches_market(vt_symbol):
+                self.symbol_line.addItem(vt_symbol)
+
+    def _on_market_changed(self, index: int) -> None:
+        """Repopulate the symbol picker with only the chosen exchange's
+        contracts (全部 = no filter)."""
+        if 0 <= index < len(_MARKETS):
+            self._market_filter = _MARKETS[index][1]
+        self._rebuild_symbol_list()
+
+    def _rebuild_symbol_list(self) -> None:
+        """Rebuild the symbol combo's items from _known_symbols under the
+        current market filter. Sorted so HK numeric codes and US alphabetic
+        tickers each read in order."""
+        items = sorted(s for s in self._known_symbols if self._matches_market(s))
+        self.symbol_line.clear()
+        if items:
+            self.symbol_line.addItems(items)
 
     def process_tick_event(self, event: Event) -> None:
         tick: TickData = event.data
