@@ -81,6 +81,16 @@ def main() -> None:
     main_engine.add_app(ChartWizardApp)
 
     main_window = FluentMainWindow(main_engine, event_engine)
+    # Must show() before showMaximized(): FluentWindow (built on a frameless-
+    # window implementation) computes its NavigationInterface/stacked-widget
+    # child layout against the widget's *actual displayed* geometry — calling
+    # showMaximized() directly on a widget that has never been shown skips
+    # the layout pass that breakpoint-dependent Fluent widgets rely on, so
+    # everything renders at some stale pre-layout (narrow/collapsed) size
+    # until a real user resize event forces Qt to recompute it. show() first
+    # forces that initial layout pass while still small, then showMaximized()
+    # correctly recomputes it again for the maximized size.
+    main_window.show()
     main_window.showMaximized()
 
     qapp.exec()

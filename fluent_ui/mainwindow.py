@@ -140,9 +140,42 @@ class FluentMainWindow(FluentWindow):
         self.window_title = "VeighNa Fluent"
         self.setWindowTitle(self.window_title)
 
+        self._fix_macos_traffic_lights()
+
         self.init_widgets()
         self.init_navigation()
         self.load_window_setting()
+
+    def _fix_macos_traffic_lights(self) -> None:
+        """
+        qfluentwidgets' FluentWidget.__init__ is *documented* to already do
+        the right thing on darwin — call setSystemTitleBarButtonVisible(True)
+        (native macOS close/minimize/zoom buttons, OS-positioned top-left)
+        and hide the custom FluentTitleBar's own min/max/close row (which
+        defaults to a right-aligned, Windows-style layout — see
+        FluentTitleBar.__init__'s buttonLayout in qfluentwidgets' own
+        fluent_window.py). In practice, on this machine's PySide6 6.11.1
+        (newer than what this qfluentwidgets/qframelesswindow combo was
+        tested against — see run_gui.py's own version-mismatch note), the
+        custom right-aligned buttons stayed visible instead of being hidden
+        — reported (with a screenshot) by the user running this on real
+        hardware, not something confirmed via a local screenshot here (this
+        environment has no screen-recording permission for headless
+        verification). Reasserting both halves explicitly here, after
+        FluentWindow's own __init__ has already run, makes the fix hold
+        regardless of which internal call is failing to stick — if this
+        turns out not to be the actual cause, the visible symptom (right-
+        aligned custom buttons still showing) won't change and that's the
+        signal to look elsewhere instead of at this method.
+        """
+        if platform.system() != "Darwin":
+            return
+
+        self.setSystemTitleBarButtonVisible(True)
+        for btn_name in ("minBtn", "maxBtn", "closeBtn"):
+            btn = getattr(self.titleBar, btn_name, None)
+            if btn is not None:
+                btn.hide()
 
     def init_widgets(self) -> None:
         self.home_widget = HomeWidget(self.main_engine, self.event_engine)
