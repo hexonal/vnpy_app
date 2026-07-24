@@ -43,10 +43,16 @@ class SearchableComboBox(EditableComboBox):
     Placeholder text on the call sites tells users to type to narrow.
 
     self.items is swapped to the capped/filtered subset only for the
-    duration of the popup (menu.exec() blocks until closed, so click
-    handlers that run while the menu is open — e.g. _onItemClicked's
-    findText() lookup — see the same subset; the full list is restored in
-    `finally` once exec() returns, picked or dismissed).
+    duration of the popup. self._currentIndex MUST be swapped in lockstep:
+    the base _showComboMenu() does `menu.actions()[self.currentIndex()]`
+    to highlight the selected item (qfluentwidgets combo_box.py:335), and
+    self._currentIndex is a raw position into the FULL list — with a
+    sliced self.items, an index past the slice length is an IndexError
+    raised inside the Qt click slot (crashes the app). So the index is
+    remapped to the selected item's position within the sliced list (or
+    -1 if the selection isn't in the shown subset), and both are restored
+    in `finally`. _onItemClicked resolves clicks via findText() against
+    the shown subset, so a pick still maps to the right item.
     """
 
     MAX_MENU_ITEMS = 50
@@ -54,6 +60,7 @@ class SearchableComboBox(EditableComboBox):
     def _showComboMenu(self) -> None:
         query = self.text().strip().lower()
         all_items = self.items
+        all_index = self._currentIndex
         if query:
             matched = [item for item in all_items if query in item.text.lower()]
             if not matched:
@@ -61,8 +68,14 @@ class SearchableComboBox(EditableComboBox):
         else:
             matched = all_items
 
-        self.items = matched[: self.MAX_MENU_ITEMS]
+        shown = matched[: self.MAX_MENU_ITEMS]
+        # Remap the highlighted index into the shown subset — the base
+        # class indexes menu.actions() (== len(shown)) with currentIndex().
+        selected = all_items[all_index] if 0 <= all_index < len(all_items) else None
+        self.items = shown
+        self._currentIndex = shown.index(selected) if selected in shown else -1
         try:
             super()._showComboMenu()
         finally:
             self.items = all_items
+            self._currentIndex = all_index

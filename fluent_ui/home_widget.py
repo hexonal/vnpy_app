@@ -93,6 +93,12 @@ class HomeWidget(QtWidgets.QWidget):
         right_splitter.setStretchFactor(0, 2)
         right_splitter.setStretchFactor(1, 3)
         right_splitter.setStretchFactor(2, 3)
+        # Without this, childrenCollapsible defaults True and a drag can
+        # crush a monitor to 0 height regardless of its setMinimumHeight
+        # (Qt only honors the min size when collapsing is disabled) — the
+        # monitor's own 80px floor comment relies on this being set on the
+        # splitter that actually holds it, not just the outer one.
+        right_splitter.setChildrenCollapsible(False)
 
         # Top-level horizontal splitter: trading panel | monitors. The
         # monitor side takes all extra width (stretch 1 vs 0), and the

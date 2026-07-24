@@ -27,6 +27,8 @@ from vnpy.trader.event import (
     EVENT_TRADE,
 )
 from vnpy.trader.locale import _
+from collections import deque
+
 from vnpy.trader.object import CancelRequest, OrderData
 from vnpy.trader.ui import QtCore, QtGui, QtWidgets
 
@@ -56,6 +58,16 @@ class BaseMonitor(TableWidget):
         self.main_engine = main_engine
         self.event_engine = event_engine
         self.cells: dict[str, dict] = {}
+
+        # FIFO of column-0 QTableWidgetItems in insertion order, oldest at
+        # the right end. Only used by insert-only monitors (data_key == "")
+        # for the row cap: self.row(item) locates a specific item's CURRENT
+        # physical row even after the user has sorted the table, so
+        # eviction always removes the oldest-INSERTED row — not whatever
+        # row happens to sit last in a user-applied sort order (which is
+        # what a positional removeRow(rowCount()-1) would wrongly delete on
+        # a sortable insert-only monitor like TradeMonitor).
+        self._insert_order: deque = deque()
 
         self.init_ui()
         self.load_setting()
@@ -127,25 +139,39 @@ class BaseMonitor(TableWidget):
 
     def insert_new_row(self, data: Any) -> None:
         # Cap only applies to insert-only monitors — see max_rows above.
-        # New rows go in at the top, so the ones dropped off the bottom
-        # are the oldest; cells{} is untouched because insert-only
-        # monitors never populate it (data_key check below).
+        # Evict the OLDEST-INSERTED row (front of _insert_order, tracked by
+        # item reference), not removeRow(rowCount()-1): a positional delete
+        # is only "oldest" while rows stay in insertion order, which a
+        # user column-sort breaks (TradeMonitor is sortable) — self.row()
+        # finds the tracked item's current physical row after any sort.
         if not self.data_key:
-            while self.rowCount() >= self.max_rows:
-                self.removeRow(self.rowCount() - 1)
+            while self.rowCount() >= self.max_rows and self._insert_order:
+                oldest_item = self._insert_order.popleft()
+                old_row = self.row(oldest_item)
+                if old_row >= 0:
+                    self.removeRow(old_row)
 
         self.insertRow(0)
 
         row_cells: dict = {}
+        first_cell: QtWidgets.QTableWidgetItem | None = None
         for column, header in enumerate(self.headers.keys()):
             setting = self.headers[header]
 
             content = data.__getattribute__(header)
             cell = setting["cell"](content, data)
             self.setItem(0, column, cell)
+            if column == 0:
+                first_cell = cell
 
             if setting["update"]:
                 row_cells[header] = cell
+
+        # Track insertion order for insert-only monitors' cap: newest is
+        # appended at the right, so the left end is the oldest and
+        # popleft() above evicts it.
+        if not self.data_key and first_cell is not None:
+            self._insert_order.append(first_cell)
 
         if self.data_key:
             key = data.__getattribute__(self.data_key)
