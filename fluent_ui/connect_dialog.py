@@ -69,7 +69,8 @@ class ConnectDialog(MessageBoxBase):
                         saved_value = loaded_setting[field_name]
                         line_widget.setText(str(saved_value))
 
-                    if _("密码") in field_name:
+                    lowered = field_name.lower()
+                    if _("密码") in field_name or "password" in lowered or "pwd" in lowered:
                         line_widget.setEchoMode(LineEdit.EchoMode.Password)
 
                     if field_type is int:
