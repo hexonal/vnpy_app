@@ -37,6 +37,7 @@ from vnpy.event import EventEngine
 from vnpy.trader.engine import MainEngine
 
 from fluent_ui import FluentMainWindow, create_fluent_qapp
+from fluent_ui.gateway_config import load_all_configs
 from vnpy_chartwizard import ChartWizardApp
 from vnpy_ctabacktester import CtaBacktesterApp
 from vnpy_ctastrategy import CtaStrategyApp
@@ -101,6 +102,16 @@ def main() -> None:
     # correctly recomputes it again for the maximized size.
     main_window.show()
     main_window.showMaximized()
+
+    # Auto-connect every gateway the user flagged auto_connect in its
+    # ConnectDialog (persisted to QuestDB via gateway_config). Done after
+    # show() so any connect-time logs land in the already-visible log
+    # monitor. connect() is non-blocking per NonBlockingConnectMixin, so
+    # this doesn't stall the UI even for several gateways.
+    for cfg in load_all_configs():
+        if cfg.auto_connect and cfg.setting:
+            main_engine.write_log(f"启动自动连接: {cfg.gateway_name}", "system")
+            main_engine.connect(cfg.setting, cfg.gateway_name)
 
     qapp.exec()
 

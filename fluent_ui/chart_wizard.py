@@ -45,7 +45,7 @@ from __future__ import annotations
 from copy import copy
 from datetime import datetime, timedelta
 
-from qfluentwidgets import CalendarPicker, MessageBox, PushButton
+from qfluentwidgets import CalendarPicker, MessageBox, PushButton, SegmentedWidget
 from tzlocal import get_localzone_name
 
 from vnpy.chart import CandleItem, ChartWidget, VolumeItem
@@ -56,8 +56,23 @@ from vnpy.trader.event import EVENT_CONTRACT, EVENT_TICK
 from vnpy.trader.locale import _
 from vnpy.trader.object import BarData, ContractData, SubscribeRequest, TickData
 from vnpy.trader.ui import QtCore, QtWidgets
-from vnpy.trader.utility import BarGenerator, ZoneInfo
+from vnpy.trader.utility import ZoneInfo
 from vnpy_chartwizard.engine import APP_NAME, EVENT_CHART_HISTORY, ChartWizardEngine
+
+# Broker-app-style period buttons: (label, vnpy Interval, default lookback
+# days). "5天" is a 5-trading-day intraday minute chart (matching how
+# futu/uSMART apps show it), not a 5-day-bar chart. All four map to
+# intervals FutuGateway/query_history support (futu_mapping INTERVAL_VT2FUTU:
+# K_1M/K_60M/K_DAY/K_WEEK). Order matches a broker app's tab strip.
+_PERIODS: list[tuple[str, Interval, int]] = [
+    ("5天", Interval.MINUTE, 5),
+    ("时", Interval.HOUR, 30),
+    ("日", Interval.DAILY, 365),
+    ("周", Interval.WEEKLY, 365 * 3),
+]
+_PERIOD_BY_LABEL: dict[str, tuple[Interval, int]] = {
+    label: (interval, lookback) for label, interval, lookback in _PERIODS
+}
 
 from .searchable_combo_box import SearchableComboBox
 
@@ -74,8 +89,20 @@ class ChartWizardWidget(QtWidgets.QWidget):
         self.event_engine = event_engine
         self.chart_engine: ChartWizardEngine = main_engine.get_engine(APP_NAME)
 
-        self.bgs: dict[str, BarGenerator] = {}
         self.charts: dict[str, ChartWidget] = {}
+        # Per-chart period so tick-driven live bars aggregate at the same
+        # interval the chart's history was loaded at.
+        self.chart_intervals: dict[str, Interval] = {}
+        # The current, still-forming period bar per symbol, updated on
+        # every tick and pushed to the chart (BarManager.update_bar keys by
+        # datetime, so re-pushing the same period-start datetime updates
+        # the last bar in place — this is how the day bar "ticks live" like
+        # a broker app, without needing a server-side realtime-K feed that
+        # uSMART doesn't have).
+        self.running_bars: dict[str, BarData] = {}
+        # Last seen cumulative tick volume per symbol, for per-period
+        # volume deltas (tick.volume is session-cumulative).
+        self._last_tick_volume: dict[str, float] = {}
         # O(1) dedupe alongside symbol_line's item list: findText() is a
         # Python-level linear scan (qfluentwidgets combo_box.py:244-250),
         # and _add_symbol_if_new runs once per EVENT_CONTRACT — with a
@@ -106,23 +133,25 @@ class ChartWizardWidget(QtWidgets.QWidget):
         for contract in self.main_engine.get_all_contracts():
             self._add_symbol_if_new(contract.vt_symbol)
 
-        # K-line period selector — the chart used to be hardcoded to
-        # Interval.MINUTE, so "K线无法选择年月日" was really "no interval
-        # AND no date-range control at all". Both are added here.
-        self.interval_combo = SearchableComboBox()
-        for interval in (Interval.MINUTE, Interval.HOUR, Interval.DAILY, Interval.WEEKLY):
-            self.interval_combo.addItem(interval.value, userData=interval)
+        # Broker-app-style period tab strip (5天/时/日/周) — replaces the
+        # old interval dropdown. Each new chart uses whichever period is
+        # selected here; the period also drives live-bar aggregation.
+        self.period_pivot = SegmentedWidget()
+        for label, _interval, _lookback in _PERIODS:
+            self.period_pivot.addItem(routeKey=label, text=label)
+        self.period_pivot.setCurrentItem("日")
+        self._current_period = "日"
+        self.period_pivot.currentItemChanged.connect(self._on_period_changed)
 
-        # Start/end date pickers (CalendarPicker = Fluent-native, click to
-        # open a calendar flyout — replaces the previous fixed
-        # "last 5 days" window). Default to a 30-day lookback so there's a
-        # sensible range pre-filled.
-        end_default = datetime.now()
-        start_default = end_default - timedelta(days=30)
+        # Optional custom date range — CalendarPickers, empty by default so
+        # the selected period's own lookback is used unless the user picks
+        # explicit dates (broker apps do the same: a period button plus an
+        # optional custom range). isRestEnabled lets the user clear back to
+        # "use period default".
         self.start_date = CalendarPicker()
-        self.start_date.setDate(QtCore.QDate(start_default.year, start_default.month, start_default.day))
+        self.start_date.setResetEnabled(True)
         self.end_date = CalendarPicker()
-        self.end_date.setDate(QtCore.QDate(end_default.year, end_default.month, end_default.day))
+        self.end_date.setResetEnabled(True)
 
         self.button = PushButton(_("新建图表"))
         self.button.clicked.connect(self.new_chart)
@@ -130,8 +159,7 @@ class ChartWizardWidget(QtWidgets.QWidget):
         hbox = QtWidgets.QHBoxLayout()
         hbox.addWidget(QtWidgets.QLabel(_("本地代码")))
         hbox.addWidget(self.symbol_line)
-        hbox.addWidget(QtWidgets.QLabel(_("周期")))
-        hbox.addWidget(self.interval_combo)
+        hbox.addWidget(self.period_pivot)
         hbox.addWidget(QtWidgets.QLabel(_("起")))
         hbox.addWidget(self.start_date)
         hbox.addWidget(QtWidgets.QLabel(_("止")))
@@ -155,11 +183,33 @@ class ChartWizardWidget(QtWidgets.QWidget):
         chart.add_cursor()
         return chart
 
+    def _on_period_changed(self, route_key: str) -> None:
+        self._current_period = route_key
+
+    @staticmethod
+    def _period_start(dt: datetime, interval: Interval) -> datetime:
+        """Align a tick's datetime to the start of the period it belongs
+        to — the key BarManager.update_bar uses to know whether a live
+        bar updates the last chart bar or opens a new one."""
+        if interval == Interval.HOUR:
+            return dt.replace(minute=0, second=0, microsecond=0)
+        if interval == Interval.DAILY:
+            return dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        if interval == Interval.WEEKLY:
+            monday = dt - timedelta(days=dt.weekday())
+            return monday.replace(hour=0, minute=0, second=0, microsecond=0)
+        # MINUTE (incl. the "5天" intraday chart)
+        return dt.replace(second=0, microsecond=0)
+
     def close_tab(self, index: int) -> None:
-        vt_symbol = self.tab.tabText(index)
+        # Tab text is "vt_symbol · period"; charts/state are keyed by the
+        # bare vt_symbol, so split it back out.
+        vt_symbol = self.tab.tabText(index).split(" · ")[0]
         self.tab.removeTab(index)
         self.charts.pop(vt_symbol, None)
-        self.bgs.pop(vt_symbol, None)
+        self.chart_intervals.pop(vt_symbol, None)
+        self.running_bars.pop(vt_symbol, None)
+        self._last_tick_volume.pop(vt_symbol, None)
 
     def new_chart(self) -> None:
         vt_symbol = self.symbol_line.text()
@@ -181,25 +231,28 @@ class ChartWizardWidget(QtWidgets.QWidget):
                 box.exec()
                 return
 
-        interval: Interval = self.interval_combo.currentData() or Interval.MINUTE
+        interval, lookback = _PERIOD_BY_LABEL[self._current_period]
 
-        # Read the picked date range; end is inclusive of that whole day.
+        # Date range: use the selected period's default lookback, unless
+        # the user picked explicit custom dates in both pickers.
         tz = ZoneInfo(get_localzone_name())
-        sd = self.start_date.getDate()
-        ed = self.end_date.getDate()
-        start = datetime(sd.year(), sd.month(), sd.day(), tzinfo=tz)
-        end = datetime(ed.year(), ed.month(), ed.day(), tzinfo=tz) + timedelta(days=1)
-        if start >= end:
-            box = MessageBox(_("日期区间无效"), _("起始日期必须早于结束日期。"), self.window())
-            box.hideCancelButton()
-            box.exec()
-            return
+        end = datetime.now(tz)
+        start = end - timedelta(days=lookback)
+        sd, ed = self.start_date.getDate(), self.end_date.getDate()
+        if sd.isValid() and ed.isValid():
+            start = datetime(sd.year(), sd.month(), sd.day(), tzinfo=tz)
+            end = datetime(ed.year(), ed.month(), ed.day(), tzinfo=tz) + timedelta(days=1)
+            if start >= end:
+                box = MessageBox(_("日期区间无效"), _("起始日期必须早于结束日期。"), self.window())
+                box.hideCancelButton()
+                box.exec()
+                return
 
-        self.bgs[vt_symbol] = BarGenerator(self.on_bar)
+        self.chart_intervals[vt_symbol] = interval
 
         chart = self.create_chart()
         self.charts[vt_symbol] = chart
-        self.tab.addTab(chart, vt_symbol)
+        self.tab.addTab(chart, f"{vt_symbol} · {self._current_period}")
         self.tab.setCurrentWidget(chart)
 
         self.chart_engine.query_history(vt_symbol, interval, start, end)
@@ -229,21 +282,47 @@ class ChartWizardWidget(QtWidgets.QWidget):
 
     def process_tick_event(self, event: Event) -> None:
         tick: TickData = event.data
-        bg = self.bgs.get(tick.vt_symbol)
-        if bg is None:
+        interval = self.chart_intervals.get(tick.vt_symbol)
+        if interval is None or not tick.last_price:
+            return
+        chart = self.charts.get(tick.vt_symbol)
+        if chart is None:
             return
 
-        bg.update_tick(tick)
-        if bg.bar is None:
-            # See module docstring point 1 — update_tick() silently
-            # no-ops on a zero/falsy last_price tick, most commonly the
-            # very first tick right after subscribing.
-            return
+        # Aggregate the tick into the current period's still-forming bar.
+        # datetime is the period start (see _period_start) so re-pushing it
+        # to update_bar keeps updating the SAME last chart bar until the
+        # period rolls over — the "day bar ticks live" behavior. (Assumes
+        # tick.datetime and query_history bar.datetime share a timezone
+        # convention within one gateway, which they do for FutuGateway;
+        # flagged for live calibration like the uSMART timestamp assumption.)
+        start = self._period_start(tick.datetime, interval)
+        running = self.running_bars.get(tick.vt_symbol)
+        prev_vol = self._last_tick_volume.get(tick.vt_symbol)
 
-        chart = self.charts[tick.vt_symbol]
-        bar: BarData = copy(bg.bar)
-        bar.datetime = bar.datetime.replace(second=0, microsecond=0)
-        chart.update_bar(bar)
+        if running is None or running.datetime != start:
+            running = BarData(
+                gateway_name=tick.gateway_name,
+                symbol=tick.symbol,
+                exchange=tick.exchange,
+                datetime=start,
+                interval=interval,
+                open_price=tick.last_price,
+                high_price=tick.last_price,
+                low_price=tick.last_price,
+                close_price=tick.last_price,
+                volume=0,
+            )
+            self.running_bars[tick.vt_symbol] = running
+        else:
+            running.high_price = max(running.high_price, tick.last_price)
+            running.low_price = min(running.low_price, tick.last_price)
+            running.close_price = tick.last_price
+            if prev_vol is not None:
+                running.volume += max(tick.volume - prev_vol, 0)
+
+        self._last_tick_volume[tick.vt_symbol] = tick.volume
+        chart.update_bar(copy(running))
 
     def process_history_event(self, event: Event) -> None:
         history: list[BarData] = event.data
@@ -260,8 +339,3 @@ class ChartWizardWidget(QtWidgets.QWidget):
         if contract:
             req = SubscribeRequest(contract.symbol, contract.exchange)
             self.main_engine.subscribe(req, contract.gateway_name)
-
-    def on_bar(self, bar: BarData) -> None:
-        chart = self.charts.get(bar.vt_symbol)
-        if chart is not None:
-            chart.update_bar(bar)

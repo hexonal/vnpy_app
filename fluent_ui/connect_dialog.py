@@ -3,21 +3,28 @@ Fluent-native gateway connect dialog — same logic as
 vnpy.trader.ui.widget.ConnectDialog, rebuilt on qfluentwidgets'
 MessageBoxBase (a proper Fluent modal: title/body area + yes/cancel
 buttons) instead of a plain QDialog, with QComboBox/QLineEdit swapped for
-qfluentwidgets equivalents. Same connect_gateway() semantics: reads the
-current field values, persists them to connect_<gateway>.json, then calls
-main_engine.connect(setting, gateway_name) exactly like the stock dialog.
+qfluentwidgets equivalents.
+
+This session adds three capability checkboxes (仅提供行情 / 允许交易下单 /
+启动时自动连接) that persist to QuestDB via gateway_config alongside the
+connect setting. The is_quote/is_trade flags feed the split quote/trade
+routing design; auto_connect makes run_gui reconnect the gateway on
+startup. connect setting still also saves to connect_<gateway>.json so
+nothing regresses if QuestDB is unreachable.
 """
 
 from __future__ import annotations
 
 from typing import cast
 
-from qfluentwidgets import BodyLabel, EditableComboBox, LineEdit, MessageBoxBase, SubtitleLabel
+from qfluentwidgets import BodyLabel, CheckBox, EditableComboBox, LineEdit, MessageBoxBase, SubtitleLabel
 
 from vnpy.trader.engine import MainEngine
 from vnpy.trader.locale import _
 from vnpy.trader.ui import QtGui, QtWidgets
 from vnpy.trader.utility import load_json, save_json
+
+from .gateway_config import GatewayConfig, load_config, save_config
 
 
 class ConnectDialog(MessageBoxBase):
@@ -37,6 +44,7 @@ class ConnectDialog(MessageBoxBase):
 
         default_setting: dict | None = self.main_engine.get_default_setting(self.gateway_name)
         loaded_setting: dict = load_json(self.filename)
+        saved_config: GatewayConfig | None = load_config(self.gateway_name)
 
         grid = QtWidgets.QGridLayout()
         row = 0
@@ -86,8 +94,28 @@ class ConnectDialog(MessageBoxBase):
         # the label column.
         grid.setColumnStretch(1, 1)
 
+        # Capability checkboxes — persisted to QuestDB (gateway_config),
+        # pre-filled from the saved config if any. is_quote/is_trade feed
+        # the split quote/trade routing; auto_connect drives startup.
+        # Defaults are gateway-appropriate: a gateway whose default_setting
+        # looks read-only defaults to quote-only, otherwise both.
+        self.quote_check = CheckBox(_("仅提供行情(不接单)"))
+        self.trade_check = CheckBox(_("允许交易下单"))
+        self.auto_check = CheckBox(_("启动时自动连接"))
+        if saved_config is not None:
+            self.quote_check.setChecked(saved_config.is_quote)
+            self.trade_check.setChecked(saved_config.is_trade)
+            self.auto_check.setChecked(saved_config.auto_connect)
+        else:
+            self.quote_check.setChecked(True)
+            self.trade_check.setChecked(False)
+            self.auto_check.setChecked(False)
+
         self.viewLayout.addWidget(self.title_label)
         self.viewLayout.addLayout(grid)
+        self.viewLayout.addWidget(self.quote_check)
+        self.viewLayout.addWidget(self.trade_check)
+        self.viewLayout.addWidget(self.auto_check)
 
         self.yesButton.setText(_("连接"))
         self.yesButton.clicked.connect(self.connect_gateway)
@@ -126,6 +154,16 @@ class ConnectDialog(MessageBoxBase):
             setting[field_name] = field_value
 
         save_json(self.filename, setting)
+
+        # Persist capability flags + setting to QuestDB so startup can
+        # auto-connect and the routing layer can read is_quote/is_trade.
+        save_config(GatewayConfig(
+            gateway_name=self.gateway_name,
+            is_quote=self.quote_check.isChecked(),
+            is_trade=self.trade_check.isChecked(),
+            auto_connect=self.auto_check.isChecked(),
+            setting=setting,
+        ))
 
         self.main_engine.connect(setting, self.gateway_name)
         self.accept()
