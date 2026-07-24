@@ -22,6 +22,27 @@ from qfluentwidgets import EditableComboBox
 from vnpy.trader.ui import QtCore, QtWidgets
 
 
+def _strip_leading_zeros(query: str) -> str:
+    """Normalize a purely-numeric query by dropping leading zeros, so a HK
+    code typed in its conventional zero-padded form ('001', '0700') matches
+    the vt_symbol whose numeric part vnpy_futu stores unpadded ('1.SEHK',
+    '700.SEHK', see futu_mapping.futu_code_to_vt_symbol). Non-numeric queries
+    (US tickers) pass through untouched."""
+    if query.isdigit():
+        return query.lstrip("0") or "0"
+    return query
+
+
+class _ZeroTolerantCompleter(QtWidgets.QCompleter):
+    """QCompleter that strips leading zeros off a numeric completion prefix
+    before matching. qfluentwidgets' LineEdit completer machinery calls
+    setCompletionPrefix(self.text()) directly, so normalizing here is enough
+    to make '001' find '1.SEHK' without rewriting what the user typed."""
+
+    def setCompletionPrefix(self, prefix: str) -> None:
+        super().setCompletionPrefix(_strip_leading_zeros(prefix))
+
+
 class SearchableComboBox(EditableComboBox):
     """
     EditableComboBox with the type-to-filter behavior its name implies but
@@ -77,6 +98,33 @@ class SearchableComboBox(EditableComboBox):
         line_edit = getattr(self, "lineEdit", None)
         if line_edit is not None and hasattr(line_edit, "setInputMethodHints"):
             line_edit.setInputMethodHints(hints)
+
+        # Type-to-search: a QCompleter drives qfluentwidgets' LineEdit
+        # completer popup, which appears AS THE USER TYPES (the _showComboMenu
+        # override below only fires on the dropdown-arrow click). Without this
+        # the field looked broken — typing a code showed nothing until the
+        # arrow was clicked. MatchContains = fuzzy substring; case-insensitive
+        # so "aapl" finds "AAPL.SMART"; capped popup so a broad query doesn't
+        # build thousands of rows.
+        self._completer_model = QtCore.QStringListModel(self)
+        self._completer_item_count = -1
+        completer = _ZeroTolerantCompleter(self._completer_model, self)
+        completer.setCaseSensitivity(QtCore.Qt.CaseSensitivity.CaseInsensitive)
+        completer.setFilterMode(QtCore.Qt.MatchFlag.MatchContains)
+        completer.setCompletionMode(QtWidgets.QCompleter.CompletionMode.PopupCompletion)
+        completer.setMaxVisibleItems(self.MAX_MENU_ITEMS)
+        self.setCompleter(completer)
+        # Keep the completer's model in step with the combo's items (which
+        # change on market-filter switch and as contracts stream in). Rebuilt
+        # only when the item count actually changed, so a burst of keystrokes
+        # over an unchanged ~13k-symbol list doesn't rebuild it each time.
+        self.textEdited.connect(self._sync_completer_model)
+
+    def _sync_completer_model(self, _text: str = "") -> None:
+        if len(self.items) == self._completer_item_count:
+            return
+        self._completer_item_count = len(self.items)
+        self._completer_model.setStringList([item.text for item in self.items])
 
     def _showComboMenu(self) -> None:
         query = self.text().strip().lower()
