@@ -44,6 +44,7 @@ from vnpy_datamanager import DataManagerApp
 from vnpy_futu import FutuGateway
 from vnpy_paperaccount import PaperAccountApp
 from vnpy_riskmanager import RiskManagerApp
+from vnpy_usmart import UsmartGateway
 
 
 def main() -> None:
@@ -53,6 +54,14 @@ def main() -> None:
     main_engine = MainEngine(event_engine)
 
     main_engine.add_gateway(FutuGateway)
+    # uSMART quote gateway (read-only, like FutuGateway here). Registering
+    # it only adds a "连接USMART" entry to the home widget's gateway menu
+    # (home_widget iterates get_all_gateway_names(); ConnectDialog builds
+    # the form from default_setting) — nothing connects until credentials
+    # from uSMART's open-api application are entered. See
+    # vnpy_usmart/README.md for the token/RSA-key setup and the four
+    # documented spec assumptions pending first live calibration.
+    main_engine.add_gateway(UsmartGateway)
 
     # Load order matters here — both RiskManagerApp and PaperAccountApp
     # monkey-patch main_engine.send_order (see vnpy_riskmanager.engine.
