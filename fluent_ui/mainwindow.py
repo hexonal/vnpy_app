@@ -117,10 +117,27 @@ def create_fluent_qapp(app_name: str = "VeighNa Fluent") -> QtWidgets.QApplicati
     to query QFontDatabase, so this runs the vnpy default font briefly
     before overriding it with the platform's best available family.
     """
+    # Point font.family at the platform's best CJK family BEFORE _create_qapp
+    # runs. vnpy's create_qapp does QApplication(...) then
+    # setFont(QFont(SETTINGS["font.family"], ...)) — so if the setting is
+    # still 微软雅黑 (Windows-only) at that point, Qt logs the "missing font
+    # family 微软雅黑" substitution during _create_qapp, before we could
+    # override it. We can't query QFontDatabase yet (no QApplication exists),
+    # so optimistically set the top candidate (PingFang SC is a macOS system
+    # font, always installed ≥10.11); _select_smooth_font() re-checks against
+    # the real font DB once the app exists and corrects if the guess is off.
+    candidates = _FONT_CANDIDATES.get(platform.system(), [])
+    if candidates:
+        SETTINGS["font.family"] = candidates[0]
+
     qapp = _create_qapp(app_name)
     qapp.setStyleSheet("")
 
+    # Now the QApplication exists — resolve the actually-installed family and
+    # correct both the setting (read directly by vnpy's own widgets) and the
+    # app default font.
     smooth_font = _select_smooth_font()
+    SETTINGS["font.family"] = smooth_font
     qapp.setFont(QtGui.QFont(smooth_font, SETTINGS["font.size"]))
 
     return qapp

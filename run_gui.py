@@ -33,6 +33,17 @@ import os
 # vnpy.trader.locale's import time.
 os.environ.setdefault("LANGUAGE", "zh_CN")
 
+# Silence Qt's benign one-time font-substitution notices from the
+# qt.qpa.fonts category ("missing font family …"). Two families get
+# requested that don't exist on macOS: vnpy's own 微软雅黑 (already handled by
+# pointing SETTINGS["font.family"] at PingFang SC in mainwindow.
+# create_fluent_qapp) and qfluentwidgets' internal "Segoe UI" — the latter is
+# requested via a QFont families() FALLBACK list that already includes
+# PingFang SC, so text renders correctly and only the log line is noise.
+# Scoped to the fonts category alone; every other Qt warning/error still
+# surfaces. Must be set before the first Qt import.
+os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.fonts=false")
+
 from vnpy.event import EventEngine
 from vnpy.trader.engine import MainEngine
 

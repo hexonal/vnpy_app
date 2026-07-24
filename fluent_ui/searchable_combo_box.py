@@ -19,6 +19,8 @@ from __future__ import annotations
 
 from qfluentwidgets import EditableComboBox
 
+from vnpy.trader.ui import QtCore, QtWidgets
+
 
 class SearchableComboBox(EditableComboBox):
     """
@@ -56,6 +58,25 @@ class SearchableComboBox(EditableComboBox):
     """
 
     MAX_MENU_ITEMS = 50
+
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        # A vt_symbol is always Latin (e.g. 1.SEHK / AAPL.SMART), never CJK.
+        # Declaring the entry field Latin-only stops the macOS pinyin input
+        # method from popping its candidate window over this box and
+        # injecting stray characters when the user has a Chinese input
+        # source active — the "1啊 2阿 …" candidate bar seen hijacking symbol
+        # entry. Hints are set on the inner LineEdit (the actual focus/IME
+        # target), with a fallback to the combo itself.
+        hints = (
+            QtCore.Qt.InputMethodHint.ImhLatinOnly
+            | QtCore.Qt.InputMethodHint.ImhNoPredictiveText
+            | QtCore.Qt.InputMethodHint.ImhNoAutoUppercase
+        )
+        self.setInputMethodHints(hints)
+        line_edit = getattr(self, "lineEdit", None)
+        if line_edit is not None and hasattr(line_edit, "setInputMethodHints"):
+            line_edit.setInputMethodHints(hints)
 
     def _showComboMenu(self) -> None:
         query = self.text().strip().lower()
