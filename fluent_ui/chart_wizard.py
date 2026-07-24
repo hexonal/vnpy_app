@@ -439,7 +439,12 @@ class ChartWizardWidget(QtWidgets.QWidget):
     def process_tick_event(self, event: Event) -> None:
         tick: TickData = event.data
         interval = self.chart_intervals.get(tick.vt_symbol)
-        if interval is None or not tick.last_price:
+        # Drop non-positive prices: `not tick.last_price` catches 0/None; the
+        # `< 0` catches a negative (which `not` does NOT — it would corrupt
+        # low_price). A book-only tick before the first quote also lands here
+        # (last_price 0). No stock has a negative price, so this is pure
+        # garbage-in protection.
+        if interval is None or not tick.last_price or tick.last_price < 0:
             return
         chart = self.charts.get(tick.vt_symbol)
         if chart is None:
@@ -456,6 +461,26 @@ class ChartWizardWidget(QtWidgets.QWidget):
         running = self.running_bars.get(tick.vt_symbol)
         prev_vol = self._last_tick_volume.get(tick.vt_symbol)
         prev_time = self._last_tick_time.get(tick.vt_symbol)
+
+        # Stale / out-of-order tick guard. Within one session futu's cumulative
+        # `volume` is monotonic non-decreasing, so a SAME-SESSION tick whose
+        # volume went DOWN is a stale re-push or out-of-order frame (common
+        # right after an OpenD reconnect snapshot). Drop it entirely: if we
+        # processed it, the delta would floor to 0 (harmless) BUT the baseline
+        # would still advance to the lower value (poisoning the next real
+        # tick's delta into a phantom overcount), and its possibly-stale
+        # extreme price would paint a permanent fake wick on high/low. A date
+        # change is a legitimate session reset, not staleness — let it fall
+        # through to the rollover branch below. (Guard on volume, never on
+        # datetime: futu is second-precision, so a `tick.datetime > last`
+        # guard would wrongly drop the 2nd tick of the same second.)
+        if (
+            prev_vol is not None
+            and prev_time is not None
+            and tick.datetime.date() == prev_time.date()
+            and tick.volume < prev_vol
+        ):
+            return
 
         # This tick's volume contribution. tick.volume is session-cumulative,
         # so normally it's the delta against the previous tick; on a session

@@ -146,12 +146,55 @@ def test_first_tick_seeds_zero_no_baseline() -> None:
     _assert("first-tick bar seeds volume 0", chart.last.volume == 0)
 
 
+def test_negative_price_tick_is_dropped() -> None:
+    """A negative last_price must not reach the bar (it would corrupt low).
+    `not tick.last_price` alone misses it — the `< 0` check is the guard."""
+    fake, chart = _make_self("0700.SEHK", Interval.MINUTE)
+    _feed(fake, _tick("0700", datetime(2026, 7, 24, 9, 30, 1), 100.0, 1000))
+    _feed(fake, _tick("0700", datetime(2026, 7, 24, 9, 30, 10), -5.0, 1100))  # garbage
+    bar = chart.last
+    _assert("negative-price tick ignored (low stays 100)", bar.low_price == 100.0)
+    _assert("negative-price tick ignored (close stays 100)", bar.close_price == 100.0)
+
+
+def test_stale_out_of_order_tick_is_dropped() -> None:
+    """A same-session tick whose cumulative volume went DOWN is stale/out-of-
+    order (futu volume is monotonic intraday). It must be dropped so it
+    neither poisons the volume baseline nor paints a fake wick."""
+    fake, chart = _make_self("0700.SEHK", Interval.MINUTE)
+    _feed(fake, _tick("0700", datetime(2026, 7, 24, 9, 30, 1), 100.0, 1000))
+    _feed(fake, _tick("0700", datetime(2026, 7, 24, 9, 30, 5), 101.0, 1200))  # +200
+    # Stale re-push: volume 1100 < baseline 1200, and a spurious low price 90.
+    _feed(fake, _tick("0700", datetime(2026, 7, 24, 9, 30, 8), 90.0, 1100))
+    bar = chart.last
+    _assert("stale tick did not paint fake low", bar.low_price == 100.0)
+    _assert("volume after stale = 200 (t3 dropped)", bar.volume == 200)
+    # Next real tick: delta must be from the UN-poisoned baseline 1200, so
+    # 1300-1200 = 100 (not 1300-1100 = 200 if the baseline had been advanced).
+    _feed(fake, _tick("0700", datetime(2026, 7, 24, 9, 30, 12), 102.0, 1300))
+    _assert("baseline not poisoned: volume = 300", chart.last.volume == 300)
+
+
+def test_session_rollover_still_resets_after_stale_guard() -> None:
+    """The stale guard must not swallow a legitimate session reset: a new
+    day's smaller cumulative volume is a rollover (date changed), not stale."""
+    fake, chart = _make_self("0700.SEHK", Interval.DAILY)
+    _feed(fake, _tick("0700", datetime(2026, 7, 24, 15, 0, 0), 102.0, 900000))
+    _feed(fake, _tick("0700", datetime(2026, 7, 25, 9, 30, 0), 103.0, 4000))  # new day, resets
+    day2 = chart.last
+    _assert("new-day bar is 07-25", day2.datetime.day == 25)
+    _assert("rollover volume = reset cumulative 4000 (not dropped as stale)", day2.volume == 4000)
+
+
 def main() -> None:
     tests = [
         test_same_period_accumulates,
         test_intraperiod_rollover_keeps_boundary_delta,
         test_session_rollover_uses_cumulative_not_negative_delta,
         test_first_tick_seeds_zero_no_baseline,
+        test_negative_price_tick_is_dropped,
+        test_stale_out_of_order_tick_is_dropped,
+        test_session_rollover_still_resets_after_stale_guard,
     ]
     for t in tests:
         print(t.__name__)
