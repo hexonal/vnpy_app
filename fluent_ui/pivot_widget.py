@@ -21,7 +21,10 @@ class PivotWidgdet(QtWidgets.QWidget):
         self.vbox = QtWidgets.QVBoxLayout(self)
 
         self.vbox.addWidget(self.pivot, 0, QtCore.Qt.AlignmentFlag.AlignLeft)
-        self.vbox.addWidget(self.stacked_widget)
+        # stretch=1: the stacked monitor area takes all height the pivot
+        # bar doesn't need, so this widget fills its splitter pane instead
+        # of collapsing to the tab strip's height.
+        self.vbox.addWidget(self.stacked_widget, 1)
         self.vbox.setContentsMargins(0, 0, 0, 0)
 
         self.stacked_widget.currentChanged.connect(self.on_current_index_changed)

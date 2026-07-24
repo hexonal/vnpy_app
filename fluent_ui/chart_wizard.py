@@ -45,7 +45,7 @@ from __future__ import annotations
 from copy import copy
 from datetime import datetime, timedelta
 
-from qfluentwidgets import MessageBox, PushButton
+from qfluentwidgets import CalendarPicker, MessageBox, PushButton
 from tzlocal import get_localzone_name
 
 from vnpy.chart import CandleItem, ChartWidget, VolumeItem
@@ -106,18 +106,44 @@ class ChartWizardWidget(QtWidgets.QWidget):
         for contract in self.main_engine.get_all_contracts():
             self._add_symbol_if_new(contract.vt_symbol)
 
+        # K-line period selector — the chart used to be hardcoded to
+        # Interval.MINUTE, so "K线无法选择年月日" was really "no interval
+        # AND no date-range control at all". Both are added here.
+        self.interval_combo = SearchableComboBox()
+        for interval in (Interval.MINUTE, Interval.HOUR, Interval.DAILY, Interval.WEEKLY):
+            self.interval_combo.addItem(interval.value, userData=interval)
+
+        # Start/end date pickers (CalendarPicker = Fluent-native, click to
+        # open a calendar flyout — replaces the previous fixed
+        # "last 5 days" window). Default to a 30-day lookback so there's a
+        # sensible range pre-filled.
+        end_default = datetime.now()
+        start_default = end_default - timedelta(days=30)
+        self.start_date = CalendarPicker()
+        self.start_date.setDate(QtCore.QDate(start_default.year, start_default.month, start_default.day))
+        self.end_date = CalendarPicker()
+        self.end_date.setDate(QtCore.QDate(end_default.year, end_default.month, end_default.day))
+
         self.button = PushButton(_("新建图表"))
         self.button.clicked.connect(self.new_chart)
 
         hbox = QtWidgets.QHBoxLayout()
         hbox.addWidget(QtWidgets.QLabel(_("本地代码")))
         hbox.addWidget(self.symbol_line)
+        hbox.addWidget(QtWidgets.QLabel(_("周期")))
+        hbox.addWidget(self.interval_combo)
+        hbox.addWidget(QtWidgets.QLabel(_("起")))
+        hbox.addWidget(self.start_date)
+        hbox.addWidget(QtWidgets.QLabel(_("止")))
+        hbox.addWidget(self.end_date)
         hbox.addWidget(self.button)
         hbox.addStretch()
 
         vbox = QtWidgets.QVBoxLayout()
         vbox.addLayout(hbox)
-        vbox.addWidget(self.tab)
+        # stretch=1 so the chart tab area fills the page height instead of
+        # sizing to sizeHint (same family as the home-widget layout bug).
+        vbox.addWidget(self.tab, 1)
         self.setLayout(vbox)
 
     def create_chart(self) -> ChartWidget:
@@ -155,15 +181,28 @@ class ChartWizardWidget(QtWidgets.QWidget):
                 box.exec()
                 return
 
+        interval: Interval = self.interval_combo.currentData() or Interval.MINUTE
+
+        # Read the picked date range; end is inclusive of that whole day.
+        tz = ZoneInfo(get_localzone_name())
+        sd = self.start_date.getDate()
+        ed = self.end_date.getDate()
+        start = datetime(sd.year(), sd.month(), sd.day(), tzinfo=tz)
+        end = datetime(ed.year(), ed.month(), ed.day(), tzinfo=tz) + timedelta(days=1)
+        if start >= end:
+            box = MessageBox(_("日期区间无效"), _("起始日期必须早于结束日期。"), self.window())
+            box.hideCancelButton()
+            box.exec()
+            return
+
         self.bgs[vt_symbol] = BarGenerator(self.on_bar)
 
         chart = self.create_chart()
         self.charts[vt_symbol] = chart
         self.tab.addTab(chart, vt_symbol)
+        self.tab.setCurrentWidget(chart)
 
-        end = datetime.now(ZoneInfo(get_localzone_name()))
-        start = end - timedelta(days=5)
-        self.chart_engine.query_history(vt_symbol, Interval.MINUTE, start, end)
+        self.chart_engine.query_history(vt_symbol, interval, start, end)
 
     def register_event(self) -> None:
         self.signal_tick.connect(self.process_tick_event)

@@ -69,20 +69,44 @@ class HomeWidget(QtWidgets.QWidget):
         bottom_pivot.add_widget(self.position_monitor, _("持仓"))
         bottom_pivot.add_widget(self.account_monitor, _("资金"))
 
-        vbox1 = QtWidgets.QVBoxLayout()
-        vbox1.addWidget(self.tick_monitor)
-        vbox1.addWidget(mid_pivot)
-        vbox1.addWidget(bottom_pivot)
-
-        vbox2 = QtWidgets.QVBoxLayout()
+        # Left column: trading panel (fixed-ish width) + connect button.
+        # Wrapped in a plain widget so it can be one pane of the splitter.
+        left_widget = QtWidgets.QWidget()
+        vbox2 = QtWidgets.QVBoxLayout(left_widget)
+        vbox2.setContentsMargins(0, 0, 0, 0)
         vbox2.addWidget(self.trading_widget)
         vbox2.addWidget(self.menu_button)
         vbox2.addStretch()
 
-        hbox = QtWidgets.QHBoxLayout()
-        hbox.addLayout(vbox2)
-        hbox.addLayout(vbox1)
-        self.setLayout(hbox)
+        # Right column: the three monitor sections stacked in a VERTICAL
+        # splitter so they share the full height adaptively and the user
+        # can drag the boundaries. Stretch factors give tick/orders/logs
+        # 2:3:3 of the height by default (logs+trades want the most room),
+        # but every pane stays resizable. Previously these were bare
+        # addWidget calls in a QVBoxLayout with no stretch — Qt then sized
+        # each to its sizeHint and left everything clustered top-left with
+        # the rest of the window empty (the reported layout bug).
+        right_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
+        right_splitter.addWidget(self.tick_monitor)
+        right_splitter.addWidget(mid_pivot)
+        right_splitter.addWidget(bottom_pivot)
+        right_splitter.setStretchFactor(0, 2)
+        right_splitter.setStretchFactor(1, 3)
+        right_splitter.setStretchFactor(2, 3)
+
+        # Top-level horizontal splitter: trading panel | monitors. The
+        # monitor side takes all extra width (stretch 1 vs 0), and the
+        # boundary is draggable rather than a hardcoded proportion.
+        main_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
+        main_splitter.addWidget(left_widget)
+        main_splitter.addWidget(right_splitter)
+        main_splitter.setStretchFactor(0, 0)
+        main_splitter.setStretchFactor(1, 1)
+        main_splitter.setChildrenCollapsible(False)
+
+        hbox = QtWidgets.QHBoxLayout(self)
+        hbox.setContentsMargins(0, 0, 0, 0)
+        hbox.addWidget(main_splitter)
 
         self.tick_monitor.itemDoubleClicked.connect(self.trading_widget.update_with_cell)
         self.position_monitor.itemDoubleClicked.connect(self.trading_widget.update_with_cell)

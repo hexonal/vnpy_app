@@ -69,7 +69,9 @@ class ContractManager(QtWidgets.QWidget):
 
         vbox = QtWidgets.QVBoxLayout()
         vbox.addLayout(hbox)
-        vbox.addWidget(self.contract_table)
+        # stretch=1: table fills the page height instead of sizing to its
+        # sizeHint and leaving the rest of the page empty.
+        vbox.addWidget(self.contract_table, 1)
 
         self.setLayout(vbox)
 

@@ -105,13 +105,19 @@ class ManagerWidget(QtWidgets.QWidget):
         hbox1.addWidget(update_button)
         hbox1.addWidget(download_button)
 
-        hbox2 = QtWidgets.QHBoxLayout()
-        hbox2.addWidget(self.tree)
-        hbox2.addWidget(self.table)
+        # Tree (overview list) | table (bar preview) in a draggable
+        # splitter — the table gets the larger default share (1:2) and the
+        # boundary is user-adjustable, instead of both sizing to sizeHint.
+        content_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
+        content_splitter.addWidget(self.tree)
+        content_splitter.addWidget(self.table)
+        content_splitter.setStretchFactor(0, 1)
+        content_splitter.setStretchFactor(1, 2)
+        content_splitter.setChildrenCollapsible(False)
 
         vbox = QtWidgets.QVBoxLayout()
         vbox.addLayout(hbox1)
-        vbox.addLayout(hbox2)
+        vbox.addWidget(content_splitter, 1)
         self.setLayout(vbox)
 
     def init_tree(self) -> None:

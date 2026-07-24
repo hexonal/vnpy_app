@@ -86,6 +86,10 @@ class BaseMonitor(TableWidget):
         # first column.
         self.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.Stretch)
         self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding)
+        # Floor so a splitter pane can't crush a table to zero height
+        # (a monitor collapsed to an invisible sliver looks like a bug);
+        # the splitter can still shrink it to this and no further.
+        self.setMinimumHeight(80)
 
     def init_menu(self) -> None:
         self.menu = QtWidgets.QMenu(self)
