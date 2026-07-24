@@ -31,25 +31,37 @@ class SearchableComboBox(EditableComboBox):
     internal call path; typing still falls through to EditableComboBox's
     own _onReturnPressed for committing free text not in the list.
 
-    self.items is swapped to the filtered subset only for the duration of
-    the popup (menu.exec() blocks until closed, so click handlers that run
-    while the menu is open — e.g. _onItemClicked's findText() lookup — see
-    the filtered list; the full list is restored in `finally` once exec()
-    returns, whether an item was picked or the menu was dismissed).
+    The visible menu is ALWAYS capped at MAX_MENU_ITEMS. This is not
+    cosmetic: ComboBoxBase._showComboMenu() builds one QAction per item
+    and RoundMenu.addAction() additionally constructs a QListWidgetItem
+    and re-runs adjustSize() per action — with a contract list the size a
+    connected FutuGateway produces (~22,000), an uncapped first click
+    (empty query) synchronously allocates ~22k actions + ~22k list items
+    on the UI thread and freezes the window for seconds (found by an
+    independent audit of this file; verified against the installed
+    qfluentwidgets source, combo_box.py:312-351 / menu.py:380-390).
+    Placeholder text on the call sites tells users to type to narrow.
+
+    self.items is swapped to the capped/filtered subset only for the
+    duration of the popup (menu.exec() blocks until closed, so click
+    handlers that run while the menu is open — e.g. _onItemClicked's
+    findText() lookup — see the same subset; the full list is restored in
+    `finally` once exec() returns, picked or dismissed).
     """
+
+    MAX_MENU_ITEMS = 50
 
     def _showComboMenu(self) -> None:
         query = self.text().strip().lower()
-        if not query:
-            super()._showComboMenu()
-            return
-
         all_items = self.items
-        matched = [item for item in all_items if query in item.text.lower()]
-        if not matched:
-            return
+        if query:
+            matched = [item for item in all_items if query in item.text.lower()]
+            if not matched:
+                return
+        else:
+            matched = all_items
 
-        self.items = matched
+        self.items = matched[: self.MAX_MENU_ITEMS]
         try:
             super()._showComboMenu()
         finally:

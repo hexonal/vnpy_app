@@ -45,7 +45,7 @@ from __future__ import annotations
 from copy import copy
 from datetime import datetime, timedelta
 
-from qfluentwidgets import PushButton
+from qfluentwidgets import MessageBox, PushButton
 from tzlocal import get_localzone_name
 
 from vnpy.chart import CandleItem, ChartWidget, VolumeItem
@@ -76,6 +76,12 @@ class ChartWizardWidget(QtWidgets.QWidget):
 
         self.bgs: dict[str, BarGenerator] = {}
         self.charts: dict[str, ChartWidget] = {}
+        # O(1) dedupe alongside symbol_line's item list: findText() is a
+        # Python-level linear scan (qfluentwidgets combo_box.py:244-250),
+        # and _add_symbol_if_new runs once per EVENT_CONTRACT — with a
+        # FutuGateway pushing ~22k contracts on connect, findText-based
+        # dedupe is Σi ≈ n²/2 ≈ 2×10⁸ comparisons during the burst.
+        self._known_symbols: set[str] = set()
 
         self.init_ui()
         self.register_event()
@@ -140,11 +146,13 @@ class ChartWizardWidget(QtWidgets.QWidget):
         if "LOCAL" not in vt_symbol:
             contract: ContractData | None = self.main_engine.get_contract(vt_symbol)
             if not contract:
-                QtWidgets.QMessageBox.warning(
-                    self,
+                box = MessageBox(
                     _("找不到合约"),
                     f"{vt_symbol}: 本地没有这个合约记录——先连接对应网关(合约查询会在连接成功后自动填充),再重试。",
+                    self.window(),
                 )
+                box.hideCancelButton()
+                box.exec()
                 return
 
         self.bgs[vt_symbol] = BarGenerator(self.on_bar)
@@ -173,9 +181,11 @@ class ChartWizardWidget(QtWidgets.QWidget):
     def _add_symbol_if_new(self, vt_symbol: str) -> None:
         # EVENT_CONTRACT fires once per contract per query — a gateway
         # reconnect (or a second connect() to a different market) re-fires
-        # it for symbols already in the list, so this must dedupe rather
-        # than let symbol_line grow a duplicate entry every time.
-        if self.symbol_line.findText(vt_symbol) < 0:
+        # it for symbols already in the list, so this must dedupe. Set
+        # membership, not symbol_line.findText(): see _known_symbols'
+        # init comment for why the linear scan was an O(n²) burst.
+        if vt_symbol not in self._known_symbols:
+            self._known_symbols.add(vt_symbol)
             self.symbol_line.addItem(vt_symbol)
 
     def process_tick_event(self, event: Event) -> None:

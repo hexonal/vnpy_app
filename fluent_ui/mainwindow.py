@@ -34,7 +34,7 @@ from types import ModuleType
 from typing import cast
 
 from qfluentwidgets import FluentIcon as FIF
-from qfluentwidgets import FluentWindow, NavigationItemPosition, Theme, setTheme
+from qfluentwidgets import FluentWindow, MessageBox, NavigationItemPosition, Theme, setTheme
 
 from vnpy.event import EventEngine
 from vnpy.trader.engine import BaseApp, EmailEngine, MainEngine
@@ -306,15 +306,12 @@ class FluentMainWindow(FluentWindow):
         gateways/engines cleanly), and skipping the confirm dialog risks a
         stray click killing a connected session with no chance to back out.
         """
-        reply = QtWidgets.QMessageBox.question(
-            self,
-            _("退出"),
-            _("确认退出？"),
-            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
-            QtWidgets.QMessageBox.StandardButton.No,
-        )
-
-        if reply == QtWidgets.QMessageBox.StandardButton.Yes:
+        # qfluentwidgets MessageBox (dark-mask overlay, theme-consistent)
+        # instead of a raw native QMessageBox floating over the Fluent
+        # shell; .exec() is truthy on the yes button, defaulting to "no"
+        # semantics the same way the old StandardButton.No default did
+        # (dismiss/cancel → falsy → ignore the close).
+        if MessageBox(_("退出"), _("确认退出？"), self).exec():
             for monitor in self.home_widget.get_monitors():
                 monitor.save_setting()
 

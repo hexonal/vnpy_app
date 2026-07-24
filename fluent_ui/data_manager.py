@@ -18,12 +18,19 @@ of this file's docstring claimed EditableComboBox already "支持
 type-to-filter" — that was wrong, corrected here after actually reading the
 library source instead of assuming from its name.
 
-qfluentwidgets.DateEdit is NOT used here: unlike ComboBox/LineEdit/
-PushButton/TableWidget/TreeWidget, it does not subclass QtWidgets.QDateEdit
-and its constructor doesn't accept an initial QDate the way stock code
-relies on (`QDateEdit(QDate(y, m, d))`) — swapping it would mean rewriting
-the date-handling logic, not just the widget class, for a field nobody
-complained about. Kept as plain QtWidgets.QDateEdit.
+Date fields use qfluentwidgets.CalendarPicker (setDate(QDate)/getDate(),
+verified against the installed package source) — an earlier revision of
+this docstring reasoned about a "qfluentwidgets.DateEdit" class and kept
+raw QtWidgets.QDateEdit based on that reasoning; no class by that name
+exists anywhere in the installed qfluentwidgets package (grep confirmed),
+so that was a comment about a phantom API — the second such false-claim
+comment caught in this file (the first was EditableComboBox's imagined
+type-to-filter). The raw QDateEdit it justified was also exactly the
+out-of-place native spinbox the user screenshotted in the dark theme.
+
+Message popups use qfluentwidgets.MessageBox for the same reason: with
+qdarkstyle removed (it fights qfluentwidgets), raw QtWidgets.QMessageBox
+renders as an unthemed native dialog floating over the dark Fluent shell.
 """
 
 from __future__ import annotations
@@ -31,7 +38,15 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from functools import partial
 
-from qfluentwidgets import EditableComboBox, LineEdit, PushButton, TableWidget, TreeWidget
+from qfluentwidgets import (
+    CalendarPicker,
+    EditableComboBox,
+    LineEdit,
+    MessageBox,
+    PushButton,
+    TableWidget,
+    TreeWidget,
+)
 
 from vnpy.trader.constant import Exchange, Interval
 from vnpy.trader.database import DB_TZ
@@ -210,7 +225,7 @@ class ManagerWidget(QtWidgets.QWidget):
             f"结束：{end}\n"
             f"总数量：{count}\n"
         )
-        QtWidgets.QMessageBox.information(self, _("载入成功！"), msg)
+        self._show_message(_("载入成功！"), msg)
 
     def output_data(self, symbol: str, exchange: Exchange, interval: Interval, start: datetime, end: datetime) -> None:
         dialog = DateRangeDialog(start, end)
@@ -225,7 +240,7 @@ class ManagerWidget(QtWidgets.QWidget):
 
         result = self.engine.output_data_to_csv(path, symbol, exchange, interval, start, end)
         if not result:
-            QtWidgets.QMessageBox.warning(self, _("导出失败！"), _("该文件已在其他程序中打开，请关闭相关程序后再尝试导出数据。"))
+            self._show_message(_("导出失败！"), _("该文件已在其他程序中打开，请关闭相关程序后再尝试导出数据。"))
 
     def show_data(self, symbol: str, exchange: Exchange, interval: Interval, start: datetime, end: datetime) -> None:
         dialog = DateRangeDialog(start, end)
@@ -250,20 +265,16 @@ class ManagerWidget(QtWidgets.QWidget):
             self.table.setItem(row, 7, DataCell(str(bar.open_interest)))
 
     def delete_data(self, symbol: str, exchange: Exchange, interval: Interval) -> None:
-        n = QtWidgets.QMessageBox.warning(
-            self,
+        confirm = MessageBox(
             _("删除确认"),
             f"请确认是否要删除{symbol} {exchange.value} {interval.value}的全部数据",
-            QtWidgets.QMessageBox.StandardButton.Ok,
-            QtWidgets.QMessageBox.StandardButton.Cancel,
+            self.window(),
         )
-        if n == QtWidgets.QMessageBox.StandardButton.Cancel:
+        if not confirm.exec():
             return
 
         count = self.engine.delete_bar_data(symbol, exchange, interval)
-        QtWidgets.QMessageBox.information(
-            self, _("删除成功"), f"已删除{symbol} {exchange.value} {interval.value}共计{count}条数据"
-        )
+        self._show_message(_("删除成功"), f"已删除{symbol} {exchange.value} {interval.value}共计{count}条数据")
 
     def update_data(self) -> None:
         overviews: list[BarOverview] = self.engine.get_bar_overview()
@@ -290,7 +301,12 @@ class ManagerWidget(QtWidgets.QWidget):
         dialog.exec()
 
     def output(self, msg: str) -> None:
-        QtWidgets.QMessageBox.warning(self, _("数据下载"), msg)
+        self._show_message(_("数据下载"), msg)
+
+    def _show_message(self, title: str, content: str) -> None:
+        box = MessageBox(title, content, self.window())
+        box.hideCancelButton()
+        box.exec()
 
 
 class DateRangeDialog(QtWidgets.QDialog):
@@ -299,8 +315,19 @@ class DateRangeDialog(QtWidgets.QDialog):
 
         self.setWindowTitle(_("选择数据区间"))
 
-        self.start_edit = QtWidgets.QDateEdit(QtCore.QDate(start.year, start.month, start.day + 1))
-        self.end_edit = QtWidgets.QDateEdit(QtCore.QDate(end.year, end.month, end.day + 1))
+        # The +1-day offsets replicate stock vnpy_datamanager's behavior
+        # verbatim — but computed with timedelta instead of the stock
+        # `QDate(y, m, day + 1)`, which constructs an INVALID QDate
+        # whenever start/end falls on the last day of a month (day+1
+        # overflows; QDate has no rollover). Inherited off-by-one
+        # semantics preserved; the month-end crash surface removed.
+        start_init = start + timedelta(days=1)
+        end_init = end + timedelta(days=1)
+
+        self.start_edit = CalendarPicker()
+        self.start_edit.setDate(QtCore.QDate(start_init.year, start_init.month, start_init.day))
+        self.end_edit = CalendarPicker()
+        self.end_edit.setDate(QtCore.QDate(end_init.year, end_init.month, end_init.day))
 
         button = PushButton(_("确定"))
         button.clicked.connect(self.accept)
@@ -312,8 +339,10 @@ class DateRangeDialog(QtWidgets.QDialog):
         self.setLayout(form)
 
     def get_date_range(self) -> tuple[datetime, datetime]:
-        start = self.start_edit.dateTime().toPython()
-        end = self.end_edit.dateTime().toPython() + timedelta(days=1)
+        start_date = self.start_edit.getDate()
+        end_date = self.end_edit.getDate()
+        start = datetime(start_date.year(), start_date.month(), start_date.day())
+        end = datetime(end_date.year(), end_date.month(), end_date.day()) + timedelta(days=1)
         return start, end
 
 
@@ -322,7 +351,9 @@ class ImportDialog(QtWidgets.QDialog):
         super().__init__(parent)
 
         self.setWindowTitle(_("从CSV文件导入数据"))
-        self.setFixedWidth(320)
+        # Minimum, not fixed: 320px fixed left Fluent combo fields (30px
+        # arrow button + qss padding) clipped next to Chinese form labels.
+        self.setMinimumWidth(420)
         self.setWindowFlags(
             (self.windowFlags() | QtCore.Qt.WindowType.CustomizeWindowHint)
             & ~QtCore.Qt.WindowType.WindowMaximizeButtonHint
@@ -415,7 +446,9 @@ class DownloadDialog(QtWidgets.QDialog):
         self.engine = engine
 
         self.setWindowTitle(_("下载历史数据"))
-        self.setFixedWidth(320)
+        # Minimum, not fixed — see ImportDialog's width comment; this
+        # dialog additionally holds a 20-char placeholder in symbol_combo.
+        self.setMinimumWidth(420)
 
         self.exchange_combo = SearchableComboBox()
         for i in Exchange:
@@ -444,7 +477,8 @@ class DownloadDialog(QtWidgets.QDialog):
 
         end_dt = datetime.now()
         start_dt = end_dt - timedelta(days=3 * 365)
-        self.start_date_edit = QtWidgets.QDateEdit(QtCore.QDate(start_dt.year, start_dt.month, start_dt.day))
+        self.start_date_edit = CalendarPicker()
+        self.start_date_edit.setDate(QtCore.QDate(start_dt.year, start_dt.month, start_dt.day))
 
         button = PushButton(_("下载"))
         button.clicked.connect(self.download)
@@ -481,10 +515,10 @@ class DownloadDialog(QtWidgets.QDialog):
             # "CFF" and hitting Enter without picking "CFFEX" from the
             # filtered dropdown. Fail with a clear message instead of a
             # raw AttributeError/None-related crash.
-            QtWidgets.QMessageBox.warning(self, _("下载失败"), _("请从下拉列表中选择交易所和周期，不要只输入部分文字后回车"))
+            self.output(_("请从下拉列表中选择交易所和周期，不要只输入部分文字后回车"))
             return
 
-        start_date = self.start_date_edit.date()
+        start_date = self.start_date_edit.getDate()
         start = datetime(start_date.year(), start_date.month(), start_date.day())
         start = start.replace(tzinfo=DB_TZ)
 
@@ -493,7 +527,9 @@ class DownloadDialog(QtWidgets.QDialog):
         else:
             count = self.engine.download_bar_data(symbol, exchange, interval, start, self.output)
 
-        QtWidgets.QMessageBox.information(self, _("下载结束"), f"下载总数据量：{count}条")
+        self.output(f"下载结束，总数据量：{count}条")
 
     def output(self, msg: str) -> None:
-        QtWidgets.QMessageBox.warning(self, _("数据下载"), msg)
+        box = MessageBox(_("数据下载"), msg, self)
+        box.hideCancelButton()
+        box.exec()

@@ -39,6 +39,15 @@ class BaseMonitor(TableWidget):
     sorting: bool = False
     headers: dict = {}
 
+    # Row cap for insert-only monitors (data_key == "", i.e. LogMonitor/
+    # TradeMonitor): stock vnpy grows these one row per event for the life
+    # of the process — a long trading session leaks rows (and their
+    # QTableWidgetItems) without bound. Keyed monitors are NOT capped:
+    # their row count is bounded by real entity count (ticks by
+    # subscription, orders by vt_orderid), every row is live data, and
+    # removing keyed rows would desync self.cells' row references.
+    max_rows: int = 5000
+
     signal: QtCore.Signal = QtCore.Signal(Event)
 
     def __init__(self, main_engine: MainEngine, event_engine: EventEngine) -> None:
@@ -113,6 +122,14 @@ class BaseMonitor(TableWidget):
             self.setSortingEnabled(True)
 
     def insert_new_row(self, data: Any) -> None:
+        # Cap only applies to insert-only monitors — see max_rows above.
+        # New rows go in at the top, so the ones dropped off the bottom
+        # are the oldest; cells{} is untouched because insert-only
+        # monitors never populate it (data_key check below).
+        if not self.data_key:
+            while self.rowCount() >= self.max_rows:
+                self.removeRow(self.rowCount() - 1)
+
         self.insertRow(0)
 
         row_cells: dict = {}

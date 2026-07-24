@@ -7,7 +7,7 @@ every main_engine call are unchanged.
 
 from __future__ import annotations
 
-from qfluentwidgets import CheckBox, EditableComboBox, LineEdit, PushButton
+from qfluentwidgets import CheckBox, EditableComboBox, LineEdit, MessageBox, PushButton
 
 from vnpy.event import Event
 from vnpy.trader.constant import Direction, Exchange, Offset, OrderType
@@ -256,15 +256,23 @@ class TradingWidget(QtWidgets.QWidget):
         for label in (self.ap1_label, self.ap2_label, self.ap3_label, self.ap4_label, self.ap5_label):
             label.setText("")
 
+    def _show_error(self, title: str, content: str) -> None:
+        """Fluent-styled error popup — raw QtWidgets.QMessageBox renders as
+        an unthemed native dialog now that qdarkstyle is gone (only
+        qfluentwidgets' own classes self-style)."""
+        box = MessageBox(title, content, self.window())
+        box.hideCancelButton()
+        box.exec()
+
     def send_order(self) -> None:
         symbol = str(self.symbol_line.text())
         if not symbol:
-            QtWidgets.QMessageBox.critical(self, _("委托失败"), _("请输入合约代码"))
+            self._show_error(_("委托失败"), _("请输入合约代码"))
             return
 
         volume_text = str(self.volume_line.text())
         if not volume_text:
-            QtWidgets.QMessageBox.critical(self, _("委托失败"), _("请输入委托数量"))
+            self._show_error(_("委托失败"), _("请输入委托数量"))
             return
         volume = float(volume_text)
 
