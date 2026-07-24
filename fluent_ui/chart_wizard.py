@@ -45,10 +45,11 @@ from __future__ import annotations
 from copy import copy
 from datetime import datetime, timedelta
 
+import pyqtgraph as pg
 from qfluentwidgets import CalendarPicker, MessageBox, PushButton, SegmentedWidget
 from tzlocal import get_localzone_name
 
-from vnpy.chart import CandleItem, ChartWidget, VolumeItem
+from vnpy.chart import ChartWidget, VolumeItem
 from vnpy.event import Event, EventEngine
 from vnpy.trader.constant import Interval
 from vnpy.trader.engine import MainEngine
@@ -60,11 +61,20 @@ from vnpy.trader.utility import ZoneInfo
 from vnpy_chartwizard.engine import APP_NAME, EVENT_CHART_HISTORY, ChartWizardEngine
 
 # Broker-app-style period buttons: (label, vnpy Interval, default lookback
-# days). "5天" is a 5-trading-day intraday minute chart (matching how
-# futu/uSMART apps show it), not a 5-day-bar chart. All four map to
-# intervals FutuGateway/query_history support (futu_mapping INTERVAL_VT2FUTU:
-# K_1M/K_60M/K_DAY/K_WEEK). Order matches a broker app's tab strip.
+# days). Order matches a broker app's tab strip: real-time first, then
+# widening windows.
+#   实时 = today's real-time intraday, 1-minute bars over the last ~24h,
+#          INCLUDING the extended/night session (盘前/盘后 for US); the
+#          night bars are drawn + marked distinctly (see SessionCandleItem
+#          + _mark_extended_sessions).
+#   5天  = 5-trading-day intraday minute chart (futu/uSMART "5日").
+#   时   = hourly bars.  日 = daily bars (one per day).  周 = weekly bars.
+# All map to intervals FutuGateway/query_history support (futu_mapping
+# INTERVAL_VT2FUTU: K_1M/K_60M/K_DAY/K_WEEK). 实时 and 5天 share the 1-minute
+# interval and differ only in lookback, so charts are tracked by period
+# LABEL (chart_periods), not by interval.
 _PERIODS: list[tuple[str, Interval, int]] = [
+    ("实时", Interval.MINUTE, 1),
     ("5天", Interval.MINUTE, 5),
     ("时", Interval.HOUR, 30),
     ("日", Interval.DAILY, 365),
@@ -73,14 +83,10 @@ _PERIODS: list[tuple[str, Interval, int]] = [
 _PERIOD_BY_LABEL: dict[str, tuple[Interval, int]] = {
     label: (interval, lookback) for label, interval, lookback in _PERIODS
 }
-# Reverse map: each Interval maps to exactly one period label (MINUTE/HOUR/
-# DAILY/WEEKLY are all distinct across _PERIODS), so an open chart's interval
-# uniquely identifies which period tab should be highlighted for it.
-_LABEL_BY_INTERVAL: dict[Interval, str] = {
-    interval: label for label, interval, _lookback in _PERIODS
-}
 
+from .market_session import is_extended
 from .searchable_combo_box import SearchableComboBox
+from .session_candle import SessionCandleItem
 
 
 class ChartWizardWidget(QtWidgets.QWidget):
@@ -99,6 +105,13 @@ class ChartWizardWidget(QtWidgets.QWidget):
         # Per-chart period so tick-driven live bars aggregate at the same
         # interval the chart's history was loaded at.
         self.chart_intervals: dict[str, Interval] = {}
+        # Per-chart period LABEL (实时/5天/时/日/周). Tracked separately from
+        # the interval because 实时 and 5天 share the 1-minute interval, so the
+        # interval alone can't say which period tab a chart is on.
+        self.chart_periods: dict[str, str] = {}
+        # Grey background bands (pg.LinearRegionItem) marking extended/night
+        # sessions per chart, so they can be cleared on reload/close.
+        self._session_bands: dict[str, list[pg.LinearRegionItem]] = {}
         # The current, still-forming period bar per symbol, updated on
         # every tick and pushed to the chart (BarManager.update_bar keys by
         # datetime, so re-pushing the same period-start datetime updates
@@ -193,7 +206,10 @@ class ChartWizardWidget(QtWidgets.QWidget):
         chart = ChartWidget()
         chart.add_plot("candle", hide_x_axis=True)
         chart.add_plot("volume", maximum_height=200)
-        chart.add_item(CandleItem, "candle", "candle")
+        # SessionCandleItem draws 盘前/盘后 (夜盘) bars in a muted palette and
+        # reports the session in the cursor legend — one of the three night-
+        # session markings (with the background band + cursor 时段 line).
+        chart.add_item(SessionCandleItem, "candle", "candle")
         chart.add_item(VolumeItem, "volume", "volume")
         chart.add_cursor()
         return chart
@@ -224,10 +240,7 @@ class ChartWizardWidget(QtWidgets.QWidget):
         vt_symbol = self._active_vt_symbol()
         if vt_symbol is None:
             return
-        interval = self.chart_intervals.get(vt_symbol)
-        if interval is None:
-            return
-        label = _LABEL_BY_INTERVAL.get(interval)
+        label = self.chart_periods.get(vt_symbol)
         if label is None or label == self._current_period:
             return
         self._syncing_period = True
@@ -247,7 +260,9 @@ class ChartWizardWidget(QtWidgets.QWidget):
             return
 
         chart.clear_all()
+        self._clear_session_bands(vt_symbol)
         self.chart_intervals[vt_symbol] = interval
+        self.chart_periods[vt_symbol] = period_label
         # Drop the running live bar + volume baseline so the new interval
         # doesn't inherit the previous period's partial bar/cumulative.
         self.running_bars.pop(vt_symbol, None)
@@ -286,8 +301,11 @@ class ChartWizardWidget(QtWidgets.QWidget):
         # bare vt_symbol, so split it back out.
         vt_symbol = self.tab.tabText(index).split(" · ")[0]
         self.tab.removeTab(index)
+        self._clear_session_bands(vt_symbol)
+        self._session_bands.pop(vt_symbol, None)
         self.charts.pop(vt_symbol, None)
         self.chart_intervals.pop(vt_symbol, None)
+        self.chart_periods.pop(vt_symbol, None)
         self.running_bars.pop(vt_symbol, None)
         self._last_tick_volume.pop(vt_symbol, None)
         self._last_tick_time.pop(vt_symbol, None)
@@ -330,6 +348,7 @@ class ChartWizardWidget(QtWidgets.QWidget):
                 return
 
         self.chart_intervals[vt_symbol] = interval
+        self.chart_periods[vt_symbol] = self._current_period
 
         chart = self.create_chart()
         self.charts[vt_symbol] = chart
@@ -432,8 +451,75 @@ class ChartWizardWidget(QtWidgets.QWidget):
         if chart is None:
             return
         chart.update_history(history)
+        # Shade the extended/night-session (盘前/盘后) stretches so they're
+        # marked at a glance, on top of SessionCandleItem's muted coloring.
+        self._mark_extended_sessions(bar.vt_symbol, history)
 
         contract: ContractData | None = self.main_engine.get_contract(bar.vt_symbol)
         if contract:
             req = SubscribeRequest(contract.symbol, contract.exchange)
             self.main_engine.subscribe(req, contract.gateway_name)
+
+    def _clear_session_bands(self, vt_symbol: str) -> None:
+        """Remove any night-session background bands drawn for a chart."""
+        chart = self.charts.get(vt_symbol)
+        bands = self._session_bands.get(vt_symbol)
+        if not bands:
+            return
+        candle_plot = chart.get_plot("candle") if chart else None
+        if candle_plot is not None:
+            for band in bands:
+                candle_plot.removeItem(band)
+        self._session_bands[vt_symbol] = []
+
+    def _mark_extended_sessions(self, vt_symbol: str, bars: list[BarData]) -> None:
+        """Draw a translucent grey band behind each contiguous run of
+        extended-hours (盘前/盘后) bars, so the night session is obvious at a
+        glance. Bar index == position in the chart's manager (history is the
+        full initial set). No-op for markets/periods with no extended bars
+        (HK/CN stocks, or the daily/weekly views). Defensive: any drawing
+        error is swallowed — a missing band must never break the chart."""
+        self._clear_session_bands(vt_symbol)
+        chart = self.charts.get(vt_symbol)
+        if chart is None:
+            return
+        candle_plot = chart.get_plot("candle")
+        if candle_plot is None:
+            return
+
+        # Collect [start_ix, end_ix] index ranges of consecutive 夜盘 bars.
+        ranges: list[tuple[int, int]] = []
+        run_start: int | None = None
+        for ix, bar in enumerate(bars):
+            if is_extended(bar):
+                if run_start is None:
+                    run_start = ix
+            elif run_start is not None:
+                ranges.append((run_start, ix - 1))
+                run_start = None
+        if run_start is not None:
+            ranges.append((run_start, len(bars) - 1))
+
+        if not ranges:
+            return
+
+        bands: list[pg.LinearRegionItem] = []
+        brush = pg.mkBrush(255, 255, 255, 18)  # faint grey, behind candles
+        try:
+            for start_ix, end_ix in ranges:
+                band = pg.LinearRegionItem(
+                    values=(start_ix - 0.5, end_ix + 0.5),
+                    orientation="vertical",
+                    brush=brush,
+                    movable=False,
+                )
+                band.setZValue(-1)  # behind the candles
+                # Hide the draggable edge lines — this is a static marker.
+                for line in band.lines:
+                    line.setPen(pg.mkPen(color=(255, 255, 255, 0)))
+                candle_plot.addItem(band)
+                bands.append(band)
+        except Exception as exc:  # noqa: BLE001 — a band is decoration, never fatal
+            print(f"[chart_wizard] 夜盘背景带绘制失败(不影响K线): {exc}")
+
+        self._session_bands[vt_symbol] = bands
