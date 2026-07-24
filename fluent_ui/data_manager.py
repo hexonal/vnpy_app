@@ -4,9 +4,19 @@ DownloadDialog/ImportDialog/DateRangeDialog — same logic and same
 underlying ManagerEngine calls (this is a third-party pip package, not
 part of the vnpy fork; the engine/business-logic layer is reused
 unmodified, only the Qt widget classes are swapped), with exchange/
-interval combo boxes swapped for qfluentwidgets' EditableComboBox so they
-support type-to-filter — that gap (plain QComboBox, no search) was the
-concrete complaint that started this file.
+interval/symbol/timezone fields using SearchableComboBox (below) so they
+actually filter as you type — that gap (plain QComboBox, no search) was
+the concrete complaint that started this file.
+
+SearchableComboBox exists because qfluentwidgets.EditableComboBox does NOT
+actually filter its dropdown by the typed text, despite being "editable" —
+read _showComboMenu() in qfluentwidgets' own combo_box.py: it unconditionally
+lists every self.items entry with no text-matching logic at all. Typing is
+only usable for committing a brand-new free-text entry on Enter
+(_onReturnPressed), not for narrowing the existing list. An earlier version
+of this file's docstring claimed EditableComboBox already "支持
+type-to-filter" — that was wrong, corrected here after actually reading the
+library source instead of assuming from its name.
 
 qfluentwidgets.DateEdit is NOT used here: unlike ComboBox/LineEdit/
 PushButton/TableWidget/TreeWidget, it does not subclass QtWidgets.QDateEdit
@@ -27,10 +37,12 @@ from vnpy.trader.constant import Exchange, Interval
 from vnpy.trader.database import DB_TZ
 from vnpy.trader.engine import EventEngine, MainEngine
 from vnpy.trader.locale import _
-from vnpy.trader.object import BarData
+from vnpy.trader.object import BarData, ContractData
 from vnpy.trader.ui import QtCore, QtWidgets
 from vnpy.trader.utility import available_timezones
 from vnpy_datamanager.engine import APP_NAME, BarOverview, ManagerEngine
+
+from .searchable_combo_box import SearchableComboBox
 
 INTERVAL_NAME_MAP = {
     Interval.MINUTE: _("分钟线"),
@@ -325,16 +337,16 @@ class ImportDialog(QtWidgets.QDialog):
         self.file_edit = LineEdit()
         self.symbol_edit = LineEdit()
 
-        self.exchange_combo = EditableComboBox()
+        self.exchange_combo = SearchableComboBox()
         for i in Exchange:
             self.exchange_combo.addItem(str(i.name), userData=i)
 
-        self.interval_combo = EditableComboBox()
+        self.interval_combo = SearchableComboBox()
         for i in Interval:
             if i != Interval.TICK:
                 self.interval_combo.addItem(str(i.name), userData=i)
 
-        self.tz_combo = EditableComboBox()
+        self.tz_combo = SearchableComboBox()
         self.tz_combo.addItems(available_timezones())
         self.tz_combo.setCurrentIndex(self.tz_combo.findText("Asia/Shanghai"))
 
@@ -405,13 +417,28 @@ class DownloadDialog(QtWidgets.QDialog):
         self.setWindowTitle(_("下载历史数据"))
         self.setFixedWidth(320)
 
-        self.symbol_edit = LineEdit()
-
-        self.exchange_combo = EditableComboBox()
+        self.exchange_combo = SearchableComboBox()
         for i in Exchange:
             self.exchange_combo.addItem(str(i.name), userData=i)
 
-        self.interval_combo = EditableComboBox()
+        # Populated from every contract the connected gateway(s) already
+        # know about (main_engine.get_all_contracts() — thousands of
+        # entries once FutuGateway has queried SEHK/SZSE/SSE/SMART, see
+        # run_gui.py), so a real, exchange-verified symbol can be found by
+        # typing part of it instead of guessing at the exact code blind.
+        # Still a SearchableComboBox (not a locked-down enum-backed one
+        # like exchange/interval above): downloading history for a symbol
+        # not yet in main_engine's contract cache is a legitimate use case
+        # (e.g. right after a fresh connect, before a full contract query
+        # has finished), so free-text entry via Enter must keep working —
+        # see download()'s fallback to self.symbol_combo.text() below.
+        self.symbol_combo = SearchableComboBox()
+        for contract in self.engine.main_engine.get_all_contracts():
+            self.symbol_combo.addItem(contract.symbol, userData=contract)
+        self.symbol_combo.activated.connect(self._on_symbol_selected)
+        self.symbol_combo.setPlaceholderText(_("输入代码搜索本地已知合约，或直接输入新代码"))
+
+        self.interval_combo = SearchableComboBox()
         for i in Interval:
             self.interval_combo.addItem(str(i.name), userData=i)
 
@@ -423,15 +450,27 @@ class DownloadDialog(QtWidgets.QDialog):
         button.clicked.connect(self.download)
 
         form = QtWidgets.QFormLayout()
-        form.addRow(_("代码"), self.symbol_edit)
+        form.addRow(_("代码"), self.symbol_combo)
         form.addRow(_("交易所"), self.exchange_combo)
         form.addRow(_("周期"), self.interval_combo)
         form.addRow(_("开始日期"), self.start_date_edit)
         form.addRow(button)
         self.setLayout(form)
 
+    def _on_symbol_selected(self, index: int) -> None:
+        """Picking a known contract from symbol_combo's dropdown also
+        selects its real exchange in exchange_combo — the user just found
+        the right vt_symbol by searching, no reason to make them separately
+        look up and re-select which exchange it trades on."""
+        contract: ContractData | None = self.symbol_combo.itemData(index)
+        if contract is None:
+            return
+        exchange_index = self.exchange_combo.findText(contract.exchange.name)
+        if exchange_index >= 0:
+            self.exchange_combo.setCurrentIndex(exchange_index)
+
     def download(self) -> None:
-        symbol = self.symbol_edit.text()
+        symbol = self.symbol_combo.text()
         exchange = self.exchange_combo.currentData()
         interval = self.interval_combo.currentData()
 

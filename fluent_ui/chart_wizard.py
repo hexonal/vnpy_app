@@ -21,6 +21,19 @@ tick->bar aggregation, with one real bug fixed and one UX gap closed:
    contracts loaded) — no feedback, looks like a broken button. Now shows
    a warning explaining why.
 
+3. That warning ("本地没有这个合约记录——先连接对应网关...") kept firing even
+   with a gateway genuinely connected and its contracts already loaded,
+   because "本地代码" was a bare LineEdit — nothing stopped a user from
+   typing just the bare symbol ("700") instead of the real vt_symbol
+   ("700.SEHK") get_contract() actually looks up by. The placeholder text
+   ("例如 700.SEHK") was the only hint, easy to miss/forget once you start
+   typing. Now a SearchableComboBox (see searchable_combo_box.py)
+   populated straight from main_engine.get_all_contracts() — search by
+   typing part of a real symbol, pick the exact vt_symbol, done; free-text
+   entry (e.g. a "LOCAL" synthetic feed with no real contract, see
+   new_chart()'s own `if "LOCAL" not in vt_symbol` branch below) still
+   works exactly as before.
+
 Spread-trading support (process_spread_event, the vnpy_spreadtrading
 import) is dropped entirely — this project never adds SpreadTradingApp,
 so EVENT_SPREAD_DATA never fires; keeping the import just for symmetry
@@ -32,24 +45,27 @@ from __future__ import annotations
 from copy import copy
 from datetime import datetime, timedelta
 
-from qfluentwidgets import LineEdit, PushButton
+from qfluentwidgets import PushButton
 from tzlocal import get_localzone_name
 
 from vnpy.chart import CandleItem, ChartWidget, VolumeItem
 from vnpy.event import Event, EventEngine
 from vnpy.trader.constant import Interval
 from vnpy.trader.engine import MainEngine
-from vnpy.trader.event import EVENT_TICK
+from vnpy.trader.event import EVENT_CONTRACT, EVENT_TICK
 from vnpy.trader.locale import _
 from vnpy.trader.object import BarData, ContractData, SubscribeRequest, TickData
 from vnpy.trader.ui import QtCore, QtWidgets
 from vnpy.trader.utility import BarGenerator, ZoneInfo
 from vnpy_chartwizard.engine import APP_NAME, EVENT_CHART_HISTORY, ChartWizardEngine
 
+from .searchable_combo_box import SearchableComboBox
+
 
 class ChartWizardWidget(QtWidgets.QWidget):
     signal_tick: QtCore.Signal = QtCore.Signal(Event)
     signal_history: QtCore.Signal = QtCore.Signal(Event)
+    signal_contract: QtCore.Signal = QtCore.Signal(Event)
 
     def __init__(self, main_engine: MainEngine, event_engine: EventEngine) -> None:
         super().__init__()
@@ -71,8 +87,18 @@ class ChartWizardWidget(QtWidgets.QWidget):
         self.tab.setTabsClosable(True)
         self.tab.tabCloseRequested.connect(self.close_tab)
 
-        self.symbol_line = LineEdit()
-        self.symbol_line.setPlaceholderText(_("例如 700.SEHK"))
+        self.symbol_line = SearchableComboBox()
+        self.symbol_line.setPlaceholderText(_("输入代码搜索本地已知合约，或直接输入新代码"))
+        # Seeded from whatever main_engine already knows *right now* — but
+        # ChartWizardWidget is constructed at app startup (init_widgets(),
+        # before the user has connected any gateway), so this is normally
+        # empty at construction time. process_contract_event() below is
+        # what actually keeps it populated as contracts stream in after a
+        # real connect() — this seed loop only matters for the case where
+        # the widget somehow gets built after contracts already exist
+        # (e.g. a future reconnect-without-rebuilding-the-widget path).
+        for contract in self.main_engine.get_all_contracts():
+            self._add_symbol_if_new(contract.vt_symbol)
 
         self.button = PushButton(_("新建图表"))
         self.button.clicked.connect(self.new_chart)
@@ -134,9 +160,23 @@ class ChartWizardWidget(QtWidgets.QWidget):
     def register_event(self) -> None:
         self.signal_tick.connect(self.process_tick_event)
         self.signal_history.connect(self.process_history_event)
+        self.signal_contract.connect(self.process_contract_event)
 
         self.event_engine.register(EVENT_CHART_HISTORY, self.signal_history.emit)
         self.event_engine.register(EVENT_TICK, self.signal_tick.emit)
+        self.event_engine.register(EVENT_CONTRACT, self.signal_contract.emit)
+
+    def process_contract_event(self, event: Event) -> None:
+        contract: ContractData = event.data
+        self._add_symbol_if_new(contract.vt_symbol)
+
+    def _add_symbol_if_new(self, vt_symbol: str) -> None:
+        # EVENT_CONTRACT fires once per contract per query — a gateway
+        # reconnect (or a second connect() to a different market) re-fires
+        # it for symbols already in the list, so this must dedupe rather
+        # than let symbol_line grow a duplicate entry every time.
+        if self.symbol_line.findText(vt_symbol) < 0:
+            self.symbol_line.addItem(vt_symbol)
 
     def process_tick_event(self, event: Event) -> None:
         tick: TickData = event.data
