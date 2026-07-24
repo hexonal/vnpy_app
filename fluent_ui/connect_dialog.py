@@ -70,11 +70,21 @@ class ConnectDialog(MessageBoxBase):
 
                     widget = line_widget
 
-                grid.addWidget(BodyLabel(f"{field_name} <{field_type.__name__}>"), row, 0)
+                # Field gets a usable minimum; the label keeps its natural
+                # (sizeHint) width — adaptive sizing below guarantees the
+                # dialog grows to fit BOTH, so neither ever clips.
+                widget.setMinimumWidth(220)
+
+                label = BodyLabel(f"{field_name} <{field_type.__name__}>")
+                grid.addWidget(label, row, 0)
                 grid.addWidget(widget, row, 1)
                 self.widgets[field_name] = (widget, field_type)
 
                 row += 1
+
+        # Any extra width goes to the input column, never squeezed out of
+        # the label column.
+        grid.setColumnStretch(1, 1)
 
         self.viewLayout.addWidget(self.title_label)
         self.viewLayout.addLayout(grid)
@@ -84,7 +94,22 @@ class ConnectDialog(MessageBoxBase):
 
         self.cancelButton.setText(_("取消"))
 
-        self.widget.setFixedWidth(self.widget.width() * 2)
+        # Adaptive width — the CONTENT decides, not a constant. The old
+        # line here was `self.widget.setFixedWidth(self.widget.width() * 2)`:
+        # it read width() BEFORE any real layout pass (i.e. a construction-
+        # time placeholder value) and doubled it — a number with no
+        # relationship to the actual field names. FUTU's short field names
+        # happened to fit; USMART's longer ones (rsa_key_path <str>,
+        # orderbook_push <str>) got their labels clipped mid-text, because
+        # a fixed width forces QGridLayout to shrink the label column below
+        # its sizeHint and QLabel just truncates. MessageBoxBase itself
+        # imposes no width constraint (verified in its source), so simply
+        # removing the fixed width lets Qt's own minimum-size propagation
+        # size the dialog to the widest label + the 220px field minimum —
+        # correct for any gateway, any field-name length, any font, any
+        # locale, with a small floor so a gateway with one tiny field
+        # doesn't produce a comically narrow dialog.
+        self.widget.setMinimumWidth(max(380, self.widget.sizeHint().width()))
 
     def connect_gateway(self) -> None:
         setting: dict = {}

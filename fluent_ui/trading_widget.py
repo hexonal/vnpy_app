@@ -44,7 +44,6 @@ class TradingWidget(QtWidgets.QWidget):
         self.register_event()
 
     def init_ui(self) -> None:
-        self.setFixedWidth(300)
 
         exchanges = self.main_engine.get_all_exchanges()
         self.exchange_combo = EditableComboBox()
@@ -156,6 +155,15 @@ class TradingWidget(QtWidgets.QWidget):
         vbox.addLayout(grid)
         vbox.addLayout(form)
         self.setLayout(vbox)
+
+        # Sidebar panel: a bounded width is intentional (same design as
+        # stock vnpy's 300px trading panel — an unconstrained panel gets
+        # stretched by the home splitter). But bound it ADAPTIVELY:
+        # content sizeHint with 300 as the floor, measured AFTER the
+        # layout is built, so longer labels/locales widen the panel
+        # instead of clipping — the same fixed-width-vs-content bug
+        # class as ConnectDialog's clipped USMART field names.
+        self.setFixedWidth(max(300, self.sizeHint().width()))
 
     def create_label(
         self, color: str = "", alignment: QtCore.Qt.AlignmentFlag = QtCore.Qt.AlignmentFlag.AlignLeft
