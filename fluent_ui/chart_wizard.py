@@ -103,6 +103,10 @@ class ChartWizardWidget(QtWidgets.QWidget):
         # Last seen cumulative tick volume per symbol, for per-period
         # volume deltas (tick.volume is session-cumulative).
         self._last_tick_volume: dict[str, float] = {}
+        # Last seen tick datetime per symbol, to detect a session rollover
+        # (date change) — on which tick.volume resets and the raw delta
+        # would go hugely negative. Mirrors BarGenerator.update_tick.
+        self._last_tick_time: dict[str, datetime] = {}
         # O(1) dedupe alongside symbol_line's item list: findText() is a
         # Python-level linear scan (qfluentwidgets combo_box.py:244-250),
         # and _add_symbol_if_new runs once per EVENT_CONTRACT — with a
@@ -210,6 +214,7 @@ class ChartWizardWidget(QtWidgets.QWidget):
         self.chart_intervals.pop(vt_symbol, None)
         self.running_bars.pop(vt_symbol, None)
         self._last_tick_volume.pop(vt_symbol, None)
+        self._last_tick_time.pop(vt_symbol, None)
 
     def new_chart(self) -> None:
         vt_symbol = self.symbol_line.text()
@@ -299,8 +304,25 @@ class ChartWizardWidget(QtWidgets.QWidget):
         start = self._period_start(tick.datetime, interval)
         running = self.running_bars.get(tick.vt_symbol)
         prev_vol = self._last_tick_volume.get(tick.vt_symbol)
+        prev_time = self._last_tick_time.get(tick.vt_symbol)
+
+        # This tick's volume contribution. tick.volume is session-cumulative,
+        # so normally it's the delta against the previous tick; on a session
+        # rollover (date change) it resets, and the new day's cumulative-so-
+        # far IS the contribution (raw delta would be hugely negative and the
+        # max(,0) floor would drop it). Mirrors BarGenerator.update_tick.
+        if prev_vol is None:
+            vol_delta = 0.0
+        elif prev_time is not None and tick.datetime.date() != prev_time.date():
+            vol_delta = tick.volume
+        else:
+            vol_delta = max(tick.volume - prev_vol, 0)
 
         if running is None or running.datetime != start:
+            # New period bar. Seed its volume with this tick's contribution
+            # rather than 0 — the boundary tick's delta belongs to the period
+            # it falls in (the new one), so dropping it would undercount every
+            # period by one tick at its open.
             running = BarData(
                 gateway_name=tick.gateway_name,
                 symbol=tick.symbol,
@@ -311,17 +333,17 @@ class ChartWizardWidget(QtWidgets.QWidget):
                 high_price=tick.last_price,
                 low_price=tick.last_price,
                 close_price=tick.last_price,
-                volume=0,
+                volume=vol_delta,
             )
             self.running_bars[tick.vt_symbol] = running
         else:
             running.high_price = max(running.high_price, tick.last_price)
             running.low_price = min(running.low_price, tick.last_price)
             running.close_price = tick.last_price
-            if prev_vol is not None:
-                running.volume += max(tick.volume - prev_vol, 0)
+            running.volume += vol_delta
 
         self._last_tick_volume[tick.vt_symbol] = tick.volume
+        self._last_tick_time[tick.vt_symbol] = tick.datetime
         chart.update_bar(copy(running))
 
     def process_history_event(self, event: Event) -> None:

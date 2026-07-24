@@ -97,8 +97,11 @@ class ConnectDialog(MessageBoxBase):
         # Capability checkboxes — persisted to QuestDB (gateway_config),
         # pre-filled from the saved config if any. is_quote/is_trade feed
         # the split quote/trade routing; auto_connect drives startup.
-        # Defaults are gateway-appropriate: a gateway whose default_setting
-        # looks read-only defaults to quote-only, otherwise both.
+        # First-time default (no saved config) is the same conservative
+        # choice for every gateway: quote-only, no trading, no auto-connect —
+        # the user opts into trading/auto explicitly. (vnpy's default_setting
+        # carries no read-only marker to derive capability from, so there's
+        # nothing gateway-specific to branch on here.)
         self.quote_check = CheckBox(_("仅提供行情(不接单)"))
         self.trade_check = CheckBox(_("允许交易下单"))
         self.auto_check = CheckBox(_("启动时自动连接"))
