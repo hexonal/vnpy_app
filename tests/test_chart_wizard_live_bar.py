@@ -141,9 +141,38 @@ def test_first_tick_seeds_zero_no_baseline() -> None:
     """The very first tick has no prior cumulative baseline, so it seeds 0
     (same as BarGenerator's first-tick behavior) rather than treating the
     whole cumulative as one bar's delta."""
-    fake, chart = _make_self("0700.SEHK", Interval.HOUR)
+    fake, chart = _make_self("0700.SEHK", Interval.MINUTE)
     _feed(fake, _tick("0700", datetime(2026, 7, 24, 9, 30, 0), 100.0, 12345))
     _assert("first-tick bar seeds volume 0", chart.last.volume == 0)
+
+
+def test_hour_interval_does_not_live_aggregate() -> None:
+    """HOUR is excluded from live aggregation: futu stamps hour bars session-
+    aligned at the bar END (:30 for US, session-relative for HK), which our
+    :00 floor never matches — live ticks would append phantom :00 bars. So an
+    HOUR chart must ignore ticks entirely (history-only)."""
+    fake, chart = _make_self("0700.SEHK", Interval.HOUR)
+    _feed(fake, _tick("0700", datetime(2026, 7, 24, 10, 15, 0), 100.0, 1000))
+    _feed(fake, _tick("0700", datetime(2026, 7, 24, 10, 45, 0), 101.0, 1500))
+    _assert("HOUR chart pushed no live bars", chart.bars == [])
+    _assert("HOUR chart kept no running bar", "0700.SEHK" not in fake.running_bars)
+
+
+def test_glitch_price_without_volume_does_not_paint_wick() -> None:
+    """A last_price change carrying no volume delta is a glitch (last_price
+    only moves on a real trade, which increments volume). It must not extend
+    high/low — those never self-heal within a period."""
+    fake, chart = _make_self("0700.SEHK", Interval.MINUTE)
+    _feed(fake, _tick("0700", datetime(2026, 7, 24, 9, 30, 1), 100.0, 1000))
+    _feed(fake, _tick("0700", datetime(2026, 7, 24, 9, 30, 5), 101.0, 1200))  # real +200
+    # Glitch: wild price 150 but SAME cumulative volume 1200 (no trade).
+    _feed(fake, _tick("0700", datetime(2026, 7, 24, 9, 30, 8), 150.0, 1200))
+    bar = chart.last
+    _assert("glitch price did not paint fake high", bar.high_price == 101.0)
+    _assert("glitch volume unchanged (200)", bar.volume == 200)
+    # A real trade at a new high (volume increments) IS recorded.
+    _feed(fake, _tick("0700", datetime(2026, 7, 24, 9, 30, 12), 102.0, 1300))
+    _assert("real new high recorded", chart.last.high_price == 102.0)
 
 
 def test_negative_price_tick_is_dropped() -> None:
@@ -192,6 +221,8 @@ def main() -> None:
         test_intraperiod_rollover_keeps_boundary_delta,
         test_session_rollover_uses_cumulative_not_negative_delta,
         test_first_tick_seeds_zero_no_baseline,
+        test_hour_interval_does_not_live_aggregate,
+        test_glitch_price_without_volume_does_not_paint_wick,
         test_negative_price_tick_is_dropped,
         test_stale_out_of_order_tick_is_dropped,
         test_session_rollover_still_resets_after_stale_guard,

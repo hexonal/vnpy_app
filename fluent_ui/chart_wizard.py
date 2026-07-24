@@ -83,6 +83,23 @@ _PERIODS: list[tuple[str, Interval, int]] = [
 _PERIOD_BY_LABEL: dict[str, tuple[Interval, int]] = {
     label: (interval, lookback) for label, interval, lookback in _PERIODS
 }
+# Intervals whose _period_start key provably matches futu's history-bar
+# time_key, so a live tick updates the last history bar IN PLACE rather than
+# appending a phantom duplicate. Verified against real futu data:
+#   MINUTE  → time_key at minute start (HH:MM:00)  ✓ matches our floor
+#   DAILY   → time_key at date 00:00               ✓ matches our midnight floor
+#   WEEKLY  → time_key at Monday 00:00             ✓ matches our Monday floor
+# HOUR is deliberately EXCLUDED: futu stamps hour bars session-aligned at the
+# bar END (HK 10:30/11:30/12:00/14:00/15:00/16:00 with the lunch break, US
+# 10:30…15:30 from the 09:30 open), which our calendar-hour floor (:00) never
+# equals — live aggregation there would append a growing row of phantom :00
+# bars. So the 时 chart shows history only; its last bar refreshes on reload,
+# not intra-hour. (Reproducing futu's session-aware hour stamping in
+# _period_start is fragile; a static hour chart is correct, a phantom-bar one
+# is not.)
+_LIVE_ALIGNED_INTERVALS: frozenset[Interval] = frozenset(
+    {Interval.MINUTE, Interval.DAILY, Interval.WEEKLY}
+)
 
 from .market_session import is_extended
 from .searchable_combo_box import SearchableComboBox
@@ -446,6 +463,11 @@ class ChartWizardWidget(QtWidgets.QWidget):
         # garbage-in protection.
         if interval is None or not tick.last_price or tick.last_price < 0:
             return
+        # Only aggregate live for intervals whose period key matches futu's
+        # history stamping (see _LIVE_ALIGNED_INTERVALS) — HOUR would spawn
+        # phantom :00 bars, so its chart stays history-only.
+        if interval not in _LIVE_ALIGNED_INTERVALS:
+            return
         chart = self.charts.get(tick.vt_symbol)
         if chart is None:
             return
@@ -513,10 +535,21 @@ class ChartWizardWidget(QtWidgets.QWidget):
             )
             self.running_bars[tick.vt_symbol] = running
         else:
-            running.high_price = max(running.high_price, tick.last_price)
-            running.low_price = min(running.low_price, tick.last_price)
             running.close_price = tick.last_price
-            running.volume += vol_delta
+            # Only extend high/low on a real trade (vol_delta > 0). last_price
+            # is the last TRADED price, so it can only move when a trade prints,
+            # which increments cumulative volume — a last_price change carrying
+            # NO volume delta is a glitch/restatement (bad OpenD relay, parse
+            # artifact, away-market print). Gating the extremes on vol_delta > 0
+            # stops such a glitch from painting a permanent fake wick on the
+            # bar (high/low never self-heal within a period; close does, on the
+            # next real tick). No arbitrary %-band needed — the volume delta is
+            # the signal. (The forum's tick-cleaning posts name 异常价格 but give
+            # no threshold; this is the robust volume-gated form.)
+            if vol_delta > 0:
+                running.high_price = max(running.high_price, tick.last_price)
+                running.low_price = min(running.low_price, tick.last_price)
+                running.volume += vol_delta
 
         self._last_tick_volume[tick.vt_symbol] = tick.volume
         self._last_tick_time[tick.vt_symbol] = tick.datetime
