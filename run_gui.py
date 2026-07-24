@@ -92,6 +92,17 @@ def main() -> None:
 
         router = main_engine.add_engine(RouterEngine)
 
+    # PAPER (default) simulates fills locally via PaperAccountApp and never
+    # reaches a real gateway. LIVE routes orders to the trade gateway for real
+    # — so PaperAccountApp MUST NOT load (its send_order hijack would silently
+    # swallow every real order; verify_patch_chain("LIVE") enforces this by
+    # raising if it finds PaperAccountApp loaded). Read the profile here so the
+    # app-load block below can honour it. LIVE only takes effect together with
+    # routing_setting.json; without routing there is no trade gateway to route
+    # to, so PaperAccountApp always loads (single-gateway paper trading).
+    profile = os.environ.get("VNPY_ROUTING_PROFILE", "PAPER").upper()
+    load_paper = router is None or profile != "LIVE"
+
     # Load order matters here — both RiskManagerApp and PaperAccountApp
     # monkey-patch main_engine.send_order (see vnpy_riskmanager.engine.
     # RiskEngine.patch_functions() and vnpy_paperaccount.engine.PaperEngine
@@ -111,19 +122,21 @@ def main() -> None:
     # PaperAccountApp's patch win and RiskManagerApp's rules never run —
     # confirmed by reading both patch_functions()/__init__() rather than
     # assumed.
-    main_engine.add_app(PaperAccountApp)
+    if load_paper:
+        main_engine.add_app(PaperAccountApp)
     main_engine.add_app(RiskManagerApp)
     main_engine.add_app(CtaStrategyApp)
     main_engine.add_app(CtaBacktesterApp)
     main_engine.add_app(DataManagerApp)
     main_engine.add_app(ChartWizardApp)
 
-    # Router startup audit — with a PAPER profile, PaperAccountApp is allowed;
-    # a LIVE profile (VNPY_ROUTING_PROFILE=LIVE) would raise here because
-    # PaperAccountApp is loaded above (its send_order hijack would swallow real
-    # orders). Runs before any gateway connects.
+    # Router startup audit — PAPER allows PaperAccountApp (loaded above); LIVE
+    # skipped it (load_paper=False), so this passes and orders reach the trade
+    # gateway. The check is the last line of defence: if some future edit loads
+    # PaperAccountApp under LIVE anyway, this raises before any gateway connects
+    # rather than silently swallowing real orders.
     if router is not None:
-        router.verify_patch_chain(os.environ.get("VNPY_ROUTING_PROFILE", "PAPER"))
+        router.verify_patch_chain(profile)
 
     main_window = FluentMainWindow(main_engine, event_engine)
     # Must show() before showMaximized(): FluentWindow (built on a frameless-
