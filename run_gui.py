@@ -46,6 +46,7 @@ os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.fonts=false")
 
 from vnpy.event import EventEngine
 from vnpy.trader.engine import MainEngine
+from vnpy.trader.utility import get_file_path
 
 from fluent_ui import FluentMainWindow, create_fluent_qapp
 from fluent_ui.gateway_config import load_all_configs
@@ -75,6 +76,22 @@ def main() -> None:
     # documented spec assumptions pending first live calibration.
     main_engine.add_gateway(UsmartGateway)
 
+    # Optional split quote/trade routing (vnpy_router). Activates ONLY if the
+    # user has created ~/.vntrader/routing_setting.json
+    # ({"quote_gateway": "FUTU", "trade_gateway": "<broker>"}). Without that
+    # file this is a no-op and the terminal behaves exactly as before (single
+    # gateway, contract owner = whoever pushes last). With it, RouterEngine
+    # forces market data to the quote gateway and orders to the trade gateway,
+    # and fixes the OMS contract-table collision (FUTU size=100 vs a trade
+    # gateway's size=1 for the same HK symbol). Must be added AFTER the
+    # gateways and BEFORE the apps whose send_order patches wrap it. See
+    # vnpy_router and docs/plans/2026-07-23-split-quote-trade-routing-design.
+    router = None
+    if get_file_path("routing_setting.json").exists():
+        from vnpy_router import RouterEngine
+
+        router = main_engine.add_engine(RouterEngine)
+
     # Load order matters here — both RiskManagerApp and PaperAccountApp
     # monkey-patch main_engine.send_order (see vnpy_riskmanager.engine.
     # RiskEngine.patch_functions() and vnpy_paperaccount.engine.PaperEngine
@@ -100,6 +117,13 @@ def main() -> None:
     main_engine.add_app(CtaBacktesterApp)
     main_engine.add_app(DataManagerApp)
     main_engine.add_app(ChartWizardApp)
+
+    # Router startup audit — with a PAPER profile, PaperAccountApp is allowed;
+    # a LIVE profile (VNPY_ROUTING_PROFILE=LIVE) would raise here because
+    # PaperAccountApp is loaded above (its send_order hijack would swallow real
+    # orders). Runs before any gateway connects.
+    if router is not None:
+        router.verify_patch_chain(os.environ.get("VNPY_ROUTING_PROFILE", "PAPER"))
 
     main_window = FluentMainWindow(main_engine, event_engine)
     # Must show() before showMaximized(): FluentWindow (built on a frameless-
