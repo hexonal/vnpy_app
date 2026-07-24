@@ -73,6 +73,12 @@ _PERIODS: list[tuple[str, Interval, int]] = [
 _PERIOD_BY_LABEL: dict[str, tuple[Interval, int]] = {
     label: (interval, lookback) for label, interval, lookback in _PERIODS
 }
+# Reverse map: each Interval maps to exactly one period label (MINUTE/HOUR/
+# DAILY/WEEKLY are all distinct across _PERIODS), so an open chart's interval
+# uniquely identifies which period tab should be highlighted for it.
+_LABEL_BY_INTERVAL: dict[Interval, str] = {
+    interval: label for label, interval, _lookback in _PERIODS
+}
 
 from .searchable_combo_box import SearchableComboBox
 
@@ -123,6 +129,8 @@ class ChartWizardWidget(QtWidgets.QWidget):
         self.tab = QtWidgets.QTabWidget()
         self.tab.setTabsClosable(True)
         self.tab.tabCloseRequested.connect(self.close_tab)
+        # Switching tabs re-syncs the period strip to that chart's period.
+        self.tab.currentChanged.connect(self._on_tab_changed)
 
         self.symbol_line = SearchableComboBox()
         self.symbol_line.setPlaceholderText(_("输入代码搜索本地已知合约，或直接输入新代码"))
@@ -145,6 +153,9 @@ class ChartWizardWidget(QtWidgets.QWidget):
             self.period_pivot.addItem(routeKey=label, text=label)
         self.period_pivot.setCurrentItem("日")
         self._current_period = "日"
+        # Guards the period strip while we set it programmatically (on tab
+        # switch) so that sync doesn't recurse into a chart reload.
+        self._syncing_period = False
         self.period_pivot.currentItemChanged.connect(self._on_period_changed)
 
         # Optional custom date range — CalendarPickers, empty by default so
@@ -187,8 +198,73 @@ class ChartWizardWidget(QtWidgets.QWidget):
         chart.add_cursor()
         return chart
 
+    def _active_vt_symbol(self) -> str | None:
+        """vt_symbol of the currently visible chart tab, or None if no tab
+        is open. Tab text is 'vt_symbol · period'."""
+        index = self.tab.currentIndex()
+        if index < 0:
+            return None
+        return self.tab.tabText(index).split(" · ")[0]
+
     def _on_period_changed(self, route_key: str) -> None:
         self._current_period = route_key
+        # Programmatic sync (tab switch) — just record it, don't reload.
+        if self._syncing_period:
+            return
+        # User clicked a period tab: apply it to the active chart, like a
+        # broker app (click 日 → the current chart reloads as a daily chart).
+        # With no chart open, it just sets the period for the next new_chart.
+        vt_symbol = self._active_vt_symbol()
+        if vt_symbol is not None and vt_symbol in self.charts:
+            self._reload_chart(vt_symbol, route_key)
+
+    def _on_tab_changed(self, index: int) -> None:
+        """Re-highlight the period strip to match the chart the user just
+        switched to, without triggering a reload."""
+        vt_symbol = self._active_vt_symbol()
+        if vt_symbol is None:
+            return
+        interval = self.chart_intervals.get(vt_symbol)
+        if interval is None:
+            return
+        label = _LABEL_BY_INTERVAL.get(interval)
+        if label is None or label == self._current_period:
+            return
+        self._syncing_period = True
+        try:
+            self.period_pivot.setCurrentItem(label)
+            self._current_period = label
+        finally:
+            self._syncing_period = False
+
+    def _reload_chart(self, vt_symbol: str, period_label: str) -> None:
+        """Re-query and redraw an already-open chart at a new period, in
+        place (same tab). Clears the old bars and live-bar state so the new
+        interval's history and live aggregation start clean."""
+        interval, lookback = _PERIOD_BY_LABEL[period_label]
+        chart = self.charts.get(vt_symbol)
+        if chart is None:
+            return
+
+        chart.clear_all()
+        self.chart_intervals[vt_symbol] = interval
+        # Drop the running live bar + volume baseline so the new interval
+        # doesn't inherit the previous period's partial bar/cumulative.
+        self.running_bars.pop(vt_symbol, None)
+        self._last_tick_volume.pop(vt_symbol, None)
+        self._last_tick_time.pop(vt_symbol, None)
+
+        # Reflect the new period in the tab label.
+        index = self.tab.currentIndex()
+        if index >= 0 and self.tab.tabText(index).split(" · ")[0] == vt_symbol:
+            self.tab.setTabText(index, f"{vt_symbol} · {period_label}")
+
+        # Period switch uses the period's own lookback (custom date pickers
+        # only apply when creating a chart, matching broker-app behavior).
+        tz = ZoneInfo(get_localzone_name())
+        end = datetime.now(tz)
+        start = end - timedelta(days=lookback)
+        self.chart_engine.query_history(vt_symbol, interval, start, end)
 
     @staticmethod
     def _period_start(dt: datetime, interval: Interval) -> datetime:

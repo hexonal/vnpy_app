@@ -158,15 +158,23 @@ class ConnectDialog(MessageBoxBase):
 
         save_json(self.filename, setting)
 
+        is_trade = self.trade_check.isChecked()
+
         # Persist capability flags + setting to QuestDB so startup can
         # auto-connect and the routing layer can read is_quote/is_trade.
+        # The persisted setting stays pure connection params — the runtime
+        # quote_only flag is derived from is_trade at connect time.
         save_config(GatewayConfig(
             gateway_name=self.gateway_name,
             is_quote=self.quote_check.isChecked(),
-            is_trade=self.trade_check.isChecked(),
+            is_trade=is_trade,
             auto_connect=self.auto_check.isChecked(),
             setting=setting,
         ))
 
-        self.main_engine.connect(setting, self.gateway_name)
+        # Trading not enabled → connect in quote-only mode so the gateway
+        # skips the trade context + account/position queries (which error
+        # out when the account has no trading authority for a market).
+        connect_setting = {**setting, "quote_only": not is_trade}
+        self.main_engine.connect(connect_setting, self.gateway_name)
         self.accept()

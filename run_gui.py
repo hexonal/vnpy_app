@@ -111,7 +111,11 @@ def main() -> None:
     for cfg in load_all_configs():
         if cfg.auto_connect and cfg.setting:
             main_engine.write_log(f"启动自动连接: {cfg.gateway_name}", "system")
-            main_engine.connect(cfg.setting, cfg.gateway_name)
+            # Same quote_only derivation as ConnectDialog: a gateway the user
+            # flagged quote-only (no is_trade) connects without a trade
+            # context so startup doesn't raise trade-authority errors.
+            connect_setting = {**cfg.setting, "quote_only": not cfg.is_trade}
+            main_engine.connect(connect_setting, cfg.gateway_name)
 
     qapp.exec()
 
