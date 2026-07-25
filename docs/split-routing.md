@@ -61,8 +61,17 @@ VNPY_ROUTING_PROFILE=LIVE .venv/bin/python run_gui.py
 `trade_gateway="USMART"` 要真能下单,连接 uSMART 时必须同时配 `trade_password`
 和 `rsa_pub_key_path`(否则网关只读行情,`send_order` 直接 REJECTED)。上真钱
 前先把 uSMART 连接里的 `environment` 设成 `"uat"`,在券商模拟 host 上验证下单
-schema —— 交易 API 字段是照官方文档搭的,尚未用真实账户跑通(见
-`vnpy_usmart/vnpy_usmart/trade_client.py` 顶部的 LIVE-CALIBRATION 说明)。
+schema。
+
+**2026-07-25 已在 uSMART SG UAT 用真实测试账户跑通全链路**:登录 → 解锁交易 →
+资金/持仓/委托查询 → 真实下单 → order-detail,`UsmartGateway.connect()` 侧拿到
+25312 个合约、资金、委托推送、快照 tick 与日线。这一轮连接打出 5 个只有真服务器
+才暴露的 bug(委托属性按主体不同、分页信封 `{"list": ...}`、`stock-record` 页码
+从 1 起、行情侧同一个信封问题、`kline` 的 `start` 是向前锚点),均已修复并加了
+回归测试 —— 详见 `vnpy_usmart/README.md`「真实服务器打出来的坑」。
+
+⚠️ `region` 必须和账户主体一致:盈立香港 = `hk`(yxzq.com),uSMART 新加坡 =
+`sg`(usmartsg.com)。选错 → 路径全 404 或签名被网关拒(107012)。
 
 ## 一句话记忆
 
