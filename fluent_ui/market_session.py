@@ -14,18 +14,26 @@ no equivalent night session, so every bar is 盘中.
 
 from __future__ import annotations
 
-from datetime import time
-
 from vnpy.trader.constant import Exchange
 from vnpy.trader.object import BarData
+from vnpy_gatewaykit.sessions import SessionKind, sessions_for
 
 REGULAR = "盘中"
 PRE_MARKET = "盘前"
 AFTER_HOURS = "盘后"
 
-# US regular cash session in ET (the timezone futu stamps US intraday bars in).
-_US_OPEN = time(9, 30)
-_US_CLOSE = time(16, 0)
+# US regular cash session in ET (the timezone futu stamps US intraday bars in),
+# read from the shared session table rather than re-declared here — the
+# recorder service schedules against the same rows, and two copies of 09:30 /
+# 16:00 are exactly how a chart and a scheduler end up disagreeing about when
+# the session changed.
+_US_REGULAR = next(
+    session
+    for session in sessions_for(Exchange.SMART)
+    if session.kind is SessionKind.REGULAR
+)
+_US_OPEN = _US_REGULAR.start
+_US_CLOSE = _US_REGULAR.end
 
 
 def market_session(bar: BarData) -> str:

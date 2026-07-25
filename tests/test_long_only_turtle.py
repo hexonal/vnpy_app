@@ -176,3 +176,74 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def test_pyramid_base_stays_persisted_and_out_of_the_gui() -> None:
+    """The ladder anchor must survive a restart, and must not be an operator field.
+
+    A history replay cannot recover it: on_init would re-derive the *current*
+    Donchian high, not the breakout price frozen at entry, so a restarted
+    process would hang its ladder off a different price than the one it
+    replaced. The gap-past-the-ladder disaster this value can cause is blocked
+    in send_buy_orders instead — see the test below.
+    """
+    from strategies.long_only_turtle_strategy import LongOnlyTurtleStrategy
+
+    assert "_pyramid_base" in LongOnlyTurtleStrategy.internal_vars
+    assert "_pyramid_base" not in LongOnlyTurtleStrategy.display_vars
+    assert "_pyramid_base" not in LongOnlyTurtleStrategy.derived_vars
+
+
+def test_ladder_skips_rungs_already_below_the_market() -> None:
+    """A rung below the market is not a breakout order — it fills at market.
+
+    This is the actual fix for the gap case. Measured before it: holding one
+    unit entered at base=101 with N=2, price at 146 after a restart, the rungs
+    came out at 102/103/104 — all below market — and the local stop engine
+    (tick.last_price >= stop.price) filled all three at 146.05 on the next
+    tick: 1500 shares, 219k notional against 100k capital. The same thing is
+    reachable without any restart, whenever a session gaps past the ladder,
+    which is why the guard lives here and not in the persistence layer.
+    """
+    strat, engine = _make_strategy(trading_capital=100000.0, risk_percent=1.0, board_lot=100)
+    strat.unit_size = 100
+    strat.atr_value = 2.0
+    strat.max_units = 4
+    strat.pos = 0
+    engine.orders.clear()
+
+    # Anchor at 101 while the market is 146: every rung (101/102/103/104) is
+    # under water and must be dropped rather than sent.
+    strat.send_buy_orders(101.0, market_price=146.0)
+    assert [o for o in engine.orders if o["direction"] == Direction.LONG] == []
+
+    # Same anchor with the market at the anchor: ordinary breakout follow-through,
+    # the at-market rung is legitimate and must still go out.
+    engine.orders.clear()
+    strat.send_buy_orders(101.0, market_price=101.0)
+    sent = [o["price"] for o in engine.orders if o["direction"] == Direction.LONG]
+    assert sent and abs(min(sent) - 101.0) < 1e-9
+
+
+def test_strategy_runs_on_daily_bars_not_minutes() -> None:
+    """Every window here is a day count, and load_bar's first argument is days —
+    so 65 only means "65 bars" when the interval is daily.
+
+    Running on the BarGenerator default (1-minute) made ATR(20) on 700.HK 0.29
+    instead of 17.88, sizing a unit at 3400 shares = 14.8x capital, 59x at
+    max_units=4. It also meant the backtest (daily) and live (minutes) were not
+    the same strategy.
+    """
+    import inspect
+
+    from vnpy.trader.constant import Interval
+    from strategies.long_only_turtle_strategy import LongOnlyTurtleStrategy
+
+    source = inspect.getsource(LongOnlyTurtleStrategy.on_init)
+    assert "Interval.DAILY" in source, "on_init 必须显式声明日线周期"
+    assert "interval=Interval.DAILY" in source, "load_bar 必须按日线加载"
+
+    # on_bar routes both engine-fed daily bars and BarGenerator minute bars into
+    # the same daily code path, so backtest and live share one timeframe.
+    routing = inspect.getsource(LongOnlyTurtleStrategy.on_bar)
+    assert "Interval.DAILY" in routing and "on_daily_bar" in routing
