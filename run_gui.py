@@ -49,6 +49,7 @@ from vnpy.trader.engine import MainEngine
 from vnpy.trader.utility import get_file_path
 
 from fluent_ui import FluentMainWindow, create_fluent_qapp
+from fluent_ui.backtester_metrics import install_extra_metrics
 from fluent_ui.gateway_config import load_all_configs
 from vnpy_chartwizard import ChartWizardApp
 from vnpy_ctabacktester import CtaBacktesterApp
@@ -129,6 +130,16 @@ def main() -> None:
     main_engine.add_app(CtaBacktesterApp)
     main_engine.add_app(DataManagerApp)
     main_engine.add_app(ChartWizardApp)
+
+    # The backtester panel hardcodes which statistics keys it renders, so
+    # anything added to the statistics dict later is computed but invisible —
+    # including upstream's own rgr_ratio and our fork's RAR / R-Cubed /
+    # Robust Sharpe. Register their labels here rather than forking the
+    # backtester. Deliberately display-only: see the module docstring for why
+    # RAR must not become an optimization target.
+    added_metrics = install_extra_metrics()
+    if added_metrics:
+        main_engine.write_log(f"回测统计面板已补充指标: {', '.join(added_metrics)}")
 
     # Router startup audit — PAPER allows PaperAccountApp (loaded above); LIVE
     # skipped it (load_paper=False), so this passes and orders reach the trade
