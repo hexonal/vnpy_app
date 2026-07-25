@@ -1,0 +1,8 @@
+{
+  "//": "vnpy_app is an application, not a package — it has no pyproject.toml, so pyright is configured here. venvPath/venv point at the shared VeighNa virtualenv; without them every vnpy / qfluentwidgets import resolves against the system interpreter and reports as unresolved, which buries the real diagnostics.",
+  "venvPath": "..",
+  "venv": "vnpy/.venv",
+  "typeCheckingMode": "standard",
+  "include": ["fluent_ui", "run_gui.py"],
+  "exclude": ["**/__pycache__"]
+}
