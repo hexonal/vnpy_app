@@ -44,20 +44,21 @@ os.environ.setdefault("LANGUAGE", "zh_CN")
 # surfaces. Must be set before the first Qt import.
 os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.fonts=false")
 
-from vnpy.event import EventEngine
-from vnpy.trader.engine import MainEngine
-from vnpy.trader.utility import get_file_path
-
 from fluent_ui import FluentMainWindow, create_fluent_qapp
 from fluent_ui.backtester_metrics import install_extra_metrics
 from fluent_ui.gateway_config import load_all_configs
+from vnpy.event import EventEngine
+from vnpy.trader.engine import MainEngine
+from vnpy.trader.utility import get_file_path
+from vnpy_alphakit.rules import install_gate_rules
 from vnpy_chartwizard import ChartWizardApp
 from vnpy_ctabacktester import CtaBacktesterApp
-from vnpy_ctastrategy import CtaStrategyApp
 from vnpy_datamanager import DataManagerApp
-from vnpy_futu import FutuGateway
 from vnpy_paperaccount import PaperAccountApp
 from vnpy_riskmanager import RiskManagerApp
+
+from vnpy_ctastrategy import CtaStrategyApp
+from vnpy_futu import FutuGateway
 from vnpy_usmart import UsmartGateway
 
 
@@ -126,6 +127,29 @@ def main() -> None:
     if load_paper:
         main_engine.add_app(PaperAccountApp)
     main_engine.add_app(RiskManagerApp)
+
+    # vnpy_alphakit's three live-path gate rules (强制止损 / 单笔风险上限 /
+    # 重复委托时间窗) join RiskManagerApp's five built-ins, so they sit on
+    # main_engine.send_order and cover every order path in this process —
+    # AlphaLiveEngine, CtaEngine, and manual orders typed into the GUI alike.
+    #
+    # Registered explicitly rather than through RiskEngine's own
+    # Path.cwd()/rules folder scan, because that scan cannot reach this
+    # checkout: MainEngine.__init__ runs os.chdir(TRADER_DIR) before any app
+    # is added, so by the time RiskEngine is constructed the working
+    # directory is the vnpy home dir (measured: cwd becomes /Users/flink, and
+    # the scan target is /Users/flink/rules), not vnpy_app. Explicit
+    # registration also keeps this wiring version-controlled and greppable.
+    #
+    # What the built-ins do NOT cover, and these do: a stop on every
+    # exposure-increasing order; a cap on |entry-stop| x qty x size rather
+    # than on raw notional; and a short-window duplicate guard (vnpy's own
+    # DuplicateOrderRule is a cumulative session counter that lets a retry
+    # seconds later straight through).
+    installed_rules = install_gate_rules(main_engine)
+    if installed_rules:
+        main_engine.write_log(f"已加载风控闸: {', '.join(installed_rules)}", "system")
+
     main_engine.add_app(CtaStrategyApp)
     main_engine.add_app(CtaBacktesterApp)
     main_engine.add_app(DataManagerApp)
