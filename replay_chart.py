@@ -37,6 +37,7 @@ from vnpy.trader.constant import Exchange, Interval
 from vnpy.trader.database import get_database
 from vnpy.trader.object import BarData
 from vnpy.trader.ui import QtCore, QtWidgets, create_qapp
+from vnpy_gatewaykit.query_window import localize_bound
 
 # (label, minutes-per-bar) — 1m is always the base/driving series.
 PERIODS: list[tuple[str, int]] = [
@@ -213,8 +214,18 @@ class ReplayChartWidget(QtWidgets.QWidget):
             self.end_edit.date().year(), self.end_edit.date().month(), self.end_edit.date().day()
         )
 
+        # The date pickers can only express a bare year/month/day, and a date
+        # picked for a contract means that contract's session — replaying
+        # "2024-01-26" for a SEHK symbol has to start at the Hong Kong open.
+        # Left naive, vnpy.trader.database.convert_tz would read it as the
+        # host's midnight and the session's first hours would silently be
+        # missing from the replay. See vnpy_gatewaykit.query_window.
         self.bars = self.database.load_bar_data(
-            symbol, exchange, interval=Interval.MINUTE, start=start, end=end
+            symbol,
+            exchange,
+            interval=Interval.MINUTE,
+            start=localize_bound(start, exchange),
+            end=localize_bound(end, exchange),
         )
 
         if not self.bars:

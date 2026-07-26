@@ -56,6 +56,7 @@ from vnpy.trader.object import BarData, ContractData
 from vnpy.trader.ui import QtCore, QtWidgets
 from vnpy.trader.utility import available_timezones
 from vnpy_datamanager.engine import APP_NAME, BarOverview, ManagerEngine
+from vnpy_gatewaykit.query_window import localize_bound
 
 from .searchable_combo_box import SearchableComboBox
 
@@ -244,7 +245,14 @@ class ManagerWidget(QtWidgets.QWidget):
         if not path:
             return
 
-        result = self.engine.output_data_to_csv(path, symbol, exchange, interval, start, end)
+        result = self.engine.output_data_to_csv(
+            path,
+            symbol,
+            exchange,
+            interval,
+            localize_bound(start, exchange),
+            localize_bound(end, exchange),
+        )
         if not result:
             self._show_message(_("导出失败！"), _("该文件已在其他程序中打开，请关闭相关程序后再尝试导出数据。"))
 
@@ -255,7 +263,13 @@ class ManagerWidget(QtWidgets.QWidget):
             return
         start, end = dialog.get_date_range()
 
-        bars: list[BarData] = self.engine.load_bar_data(symbol, exchange, interval, start, end)
+        bars: list[BarData] = self.engine.load_bar_data(
+            symbol,
+            exchange,
+            interval,
+            localize_bound(start, exchange),
+            localize_bound(end, exchange),
+        )
 
         self.table.setRowCount(0)
         self.table.setRowCount(len(bars))
@@ -345,6 +359,16 @@ class DateRangeDialog(QtWidgets.QDialog):
         self.setLayout(form)
 
     def get_date_range(self) -> tuple[datetime, datetime]:
+        """The picked range as a bare wall clock — a CalendarPicker cannot say
+        more than year/month/day.
+
+        Which clock that is depends on the contract being looked at, which this
+        dialog does not know, so the bounds stay naive here and every caller
+        runs them through vnpy_gatewaykit.query_window.localize_bound with the
+        exchange in hand. Handing them to a driver as-is would let
+        vnpy.trader.database.convert_tz read them as the *host's* midnight and
+        quietly slice the edges off the window.
+        """
         start_date = self.start_edit.getDate()
         end_date = self.end_edit.getDate()
         start = datetime(start_date.year(), start_date.month(), start_date.day())

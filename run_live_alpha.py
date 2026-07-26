@@ -21,6 +21,11 @@ Safety posture (all of it deliberate)
   overwrite a non-empty local book from an empty broker snapshot; this runner
   waits for the broker to answer ``query_position`` and only declares the
   book flat via ``--assume-flat`` if the operator says so explicitly.
+* **The universe is subscribed or the run stops.**  ``connect()`` returns
+  before the gateway's contract query answers, so this waits for the
+  contracts before subscribing and exits with ``EXIT_NO_CONTRACTS`` if they
+  never come.  An unsubscribed universe produces no ticks, hence empty bar
+  slices, hence no orders — a no-op that otherwise looks like a healthy run.
 * **Stale quotes do not become prices** — ``quote_max_age_seconds`` is set,
   and a rebalance with no fresh quote fails closed in live mode.
 * **The duplicate window persists to disk**, so a cron rerun of this script
@@ -54,11 +59,13 @@ from vnpy.trader.engine import MainEngine
 from vnpy.trader.event import EVENT_LOG
 from vnpy_alphakit.live import AlphaLiveEngine, AlphaLiveEngineError
 from vnpy_alphakit.rules import install_gate_rules
+from vnpy_futu import FutuGateway
 from vnpy_riskmanager import RiskManagerApp
 
-from vnpy_futu import FutuGateway
-
 DEFAULT_DUPLICATE_STORE = Path.home() / ".vntrader" / "alpha_live_duplicates.csv"
+
+#: The broker never described the universe, so nothing could be subscribed.
+EXIT_NO_CONTRACTS = 5
 
 
 def _on_log(event: Event) -> None:
@@ -108,6 +115,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Seconds to wait for the broker's first position push",
     )
     parser.add_argument(
+        "--contract-wait", type=float, default=60.0,
+        help=(
+            "Seconds to wait for the gateway's contract query before giving "
+            "up. Subscriptions cannot be placed until the contracts land, and "
+            "an unsubscribed universe produces no ticks and therefore no "
+            "orders — so this timeout expiring is a hard stop, not a warning."
+        ),
+    )
+    parser.add_argument(
         "--duplicate-store", default=str(DEFAULT_DUPLICATE_STORE),
         help="File the duplicate-order window persists to across processes",
     )
@@ -132,6 +148,33 @@ def build_main_engine() -> MainEngine:
 
     main_engine.add_gateway(FutuGateway)
     return main_engine
+
+
+def wait_for_contracts(
+    main_engine: MainEngine, vt_symbols: list[str], timeout: float
+) -> list[str]:
+    """Block until every symbol has a contract, and report those that never do.
+
+    ``MainEngine.connect`` is not a handshake — ``FutuGateway.connect`` starts
+    a daemon thread and returns, and the contract query is several seconds of
+    OpenD round-trips behind it.  Subscribing on the next line therefore asks
+    the OMS for contracts it has not received, which the live engine turns
+    into "跳过订阅" for the entire universe.  Nothing is subscribed, no tick
+    ever arrives, and every rebalance prices an empty slice: a process that
+    connects, mounts the risk gate, prints a clean reconciliation line and
+    never sends an order.
+
+    Polling ``get_contract`` rather than listening for ``EVENT_CONTRACT``
+    because that is the state the subscription actually depends on: an event
+    can be missed if it fires before the handler is registered, whereas the
+    OMS dict is the thing ``init_strategy`` will read.
+    """
+    deadline = time.monotonic() + timeout
+    missing = [s for s in vt_symbols if main_engine.get_contract(s) is None]
+    while missing and time.monotonic() < deadline:
+        time.sleep(0.2)
+        missing = [s for s in vt_symbols if main_engine.get_contract(s) is None]
+    return missing
 
 
 def wait_for_positions(engine: AlphaLiveEngine, timeout: float) -> bool:
@@ -173,6 +216,20 @@ def main(argv: list[str] | None = None) -> int:
             "FUTU",
         )
 
+        # Before anything subscribes. connect() above only started the
+        # gateway's connect thread; the contract list it needs is still in
+        # flight, and subscribing without it silently yields an empty universe.
+        missing = wait_for_contracts(main_engine, vt_symbols, args.contract_wait)
+        if missing:
+            print(
+                f"等待 {args.contract_wait:g}s 后仍无以下标的的合约信息: "
+                f"{', '.join(missing)} —— 未订阅行情则每轮调仓都拿到空行情、"
+                f"永不下单。请检查 OpenD 是否已启动、账户是否有该市场行情权限、"
+                f"标的代码是否正确, 或加大 --contract-wait 后重跑。",
+                file=sys.stderr,
+            )
+            return EXIT_NO_CONTRACTS
+
         engine: AlphaLiveEngine = main_engine.add_engine(AlphaLiveEngine)
         engine.set_parameters(
             vt_symbols=vt_symbols,
@@ -185,7 +242,14 @@ def main(argv: list[str] | None = None) -> int:
             duplicate_store=args.duplicate_store,
         )
         engine.add_strategy(EquityDemoStrategy, {}, signal)
-        engine.init_strategy()
+        # Belt and braces: wait_for_contracts already proved the OMS has them,
+        # so this can only fire if one disappeared in between — in which case
+        # stopping beats running a half-subscribed universe.
+        try:
+            engine.init_strategy(require_contracts=True)
+        except AlphaLiveEngineError as exc:
+            print(f"订阅行情失败: {exc}", file=sys.stderr)
+            return EXIT_NO_CONTRACTS
 
         if not wait_for_positions(engine, args.position_wait):
             if args.assume_flat:
