@@ -38,6 +38,7 @@ from vnpy.trader.event import EVENT_LOG
 from vnpy_agentbridge.engine import IntentEngine
 from vnpy_agentbridge.mcp_bridge import build_mcp_bridge
 from vnpy_agentbridge.rules.confidence_rule import ConfidenceRule
+from vnpy_alphakit.rules import install_gate_rules
 from vnpy_futu import FutuGateway
 from vnpy_riskmanager import RiskManagerApp
 
@@ -57,6 +58,21 @@ def build_main_engine() -> tuple[MainEngine, IntentEngine]:
     main_engine = MainEngine(event_engine)
 
     main_engine.add_app(RiskManagerApp)
+
+    # vnpy_alphakit's three live-path gate rules (强制止损 / 单笔风险上限 /
+    # 重复委托时间窗) on top of RiskManagerApp's five built-ins, exactly as
+    # run_gui.py does — see that file for why they are registered explicitly
+    # instead of via RiskEngine's cwd folder scan.
+    #
+    # This entry point needs them at least as much as the GUI one: the orders
+    # arriving here come from an LLM agent over the MCP bridge, and the
+    # built-in five check notional, order count and validity but never ask
+    # whether an exposure-increasing order declared a stop. Without this line
+    # a naked order placed through AgentBridge reached the gateway, while the
+    # identical order typed into the GUI was refused.
+    installed_rules = install_gate_rules(main_engine)
+    if installed_rules:
+        main_engine.write_log(f"已加载风控闸: {', '.join(installed_rules)}", "system")
 
     intent_engine = main_engine.add_engine(IntentEngine)
     intent_engine.add_rule(ConfidenceRule(min_confidence=0.6))
