@@ -27,6 +27,7 @@ one is a real possibility, not something ruled out here.
 
 from __future__ import annotations
 
+import os
 import platform
 import webbrowser
 from importlib import import_module
@@ -143,10 +144,64 @@ def create_fluent_qapp(app_name: str = "VeighNa Fluent") -> QtWidgets.QApplicati
     return qapp
 
 
+_OFFSCREEN_SEGFAULT = """\
+FluentMainWindow 在 QT_QPA_PLATFORM={platform!r} 下会**段错误**（不是异常，是 SIGSEGV）。
+
+原因：qfluentwidgets 的 FluentWindow 在 macOS 上要通过 PyObjC 建原生无边框窗口
+（PySideSix-Frameless-Window）。offscreen 平台没有 NSWindow，某个 Objective-C
+调用返回 0x1 这种非指针值，PyObjC 拿去 objc_opt_self 就崩：
+
+    Exception Type:    EXC_BAD_ACCESS (SIGSEGV)
+    KERN_INVALID_ADDRESS at 0x0000000000000001
+    0  libobjc.A.dylib              objc_opt_self + 8
+    1  _objc.cpython-314-darwin.so  id_to_python (objc_support.m:3403)
+    2  _objc.cpython-314-darwin.so  object_new + 404
+
+实测（2026-07-26）：offscreen 下 `FluentWindow()` 退出码 139，稳定复现。
+段错误绕过一切 Python 异常处理，faulthandler 也抓不到（它的 dump 文件是 0 字节）
+—— 现象看起来像"卡死"，实际是进程已经没了，只在
+~/Library/Logs/DiagnosticReports 留下一份没人看的 .ips。这道守卫的意义就是
+把那份 crash report 换成你正在读的这段话。
+
+要在无显示环境里跑 GUI（自动化测试 / CI / SSH），用标准 MainWindow：
+
+    from vnpy.trader.ui import MainWindow, create_qapp
+    app = create_qapp()
+    win = MainWindow(main_engine, event_engine)
+
+它在 offscreen 下实测可用（w.grab() 返回 1200x838 的真实位图，退出码 0）。
+本包的 Fluent 控件本身不依赖 FluentWindow —— 外壳换掉，控件照常工作。
+
+确实想试（例如换了 qfluentwidgets 版本想验证是否已修）：
+    FluentMainWindow(main_engine, event_engine, allow_offscreen=True)
+"""
+
+
+def _headless_qpa() -> str:
+    """当前 Qt 平台插件名；非无显示环境返回空串。
+
+    只认 offscreen 与 minimal —— 这两个是 Qt 官方的无显示后端，也是实测会让
+    FluentWindow 段错误的两个。vnc/eglfs 这类有真实窗口系统的不拦。
+    """
+    qpa = os.environ.get("QT_QPA_PLATFORM", "").strip().lower()
+    return qpa if qpa.startswith(("offscreen", "minimal")) else ""
+
+
 class FluentMainWindow(FluentWindow):
     """Fluent Design left-nav shell wrapping this package's Fluent-native trading widgets."""
 
-    def __init__(self, main_engine: MainEngine, event_engine: EventEngine) -> None:
+    def __init__(
+        self,
+        main_engine: MainEngine,
+        event_engine: EventEngine,
+        *,
+        allow_offscreen: bool = False,
+    ) -> None:
+        # 必须在 super().__init__() 之前 —— 段错误就发生在它内部。
+        qpa = _headless_qpa()
+        if qpa and not allow_offscreen:
+            raise RuntimeError(_OFFSCREEN_SEGFAULT.format(platform=qpa))
+
         super().__init__()
 
         self.main_engine = main_engine

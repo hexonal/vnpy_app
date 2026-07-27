@@ -51,10 +51,11 @@ from tzlocal import get_localzone_name
 
 from vnpy.chart import ChartWidget, VolumeItem
 from vnpy.event import Event, EventEngine
-from vnpy.trader.constant import Interval
+from vnpy.trader.constant import Exchange, Interval
 from vnpy.trader.engine import MainEngine
 from vnpy.trader.event import EVENT_CONTRACT, EVENT_TICK
 from vnpy.trader.locale import _
+from vnpy_gatewaykit.market_clock import market_tz
 from vnpy.trader.object import BarData, ContractData, SubscribeRequest, TickData
 from vnpy.trader.ui import QtCore, QtWidgets
 from vnpy.trader.utility import ZoneInfo
@@ -83,6 +84,28 @@ _PERIODS: list[tuple[str, Interval, int]] = [
 _PERIOD_BY_LABEL: dict[str, tuple[Interval, int]] = {
     label: (interval, lookback) for label, interval, lookback in _PERIODS
 }
+
+
+def _query_tz(vt_symbol: str) -> ZoneInfo:
+    """查询窗口的时区 —— 取标的所在市场，不是这台机器所在地。
+
+    这两者在本项目里从来不相等：机器在 US Pacific/Eastern，标的是港股。
+    用 get_localzone_name() 取窗口，查港股「最近 1 天」实际取到的是港股时间
+    的另一段，边界那根 K 线必然错位。GUI 日志里留下过现场：
+
+        查询K线 -> FUTU: HistoryRequest(symbol='1', exchange=SEHK,
+            start=... tzinfo=ZoneInfo(key='America/New_York'), ...)
+
+    查 SEHK 却带着 New_York 的墙钟。market_tz 是本项目的单一真相源，
+    与网关写 bar 用的是同一张表；未知交易所它自己会给出合理回退。
+    """
+    try:
+        _, exchange_str = vt_symbol.rsplit(".", 1)
+        return market_tz(Exchange(exchange_str))
+    except (ValueError, KeyError):
+        # vt_symbol 不合法或交易所未收录：退回机器时区并非最优，但比抛异常
+        # 让整个图表打不开要好 —— 图表是只读视图，不是下单路径。
+        return ZoneInfo(get_localzone_name())
 # Intervals whose _period_start key provably matches futu's history-bar
 # time_key, so a live tick updates the last history bar IN PLACE rather than
 # appending a phantom duplicate. Verified against real futu data:
@@ -320,7 +343,7 @@ class ChartWizardWidget(QtWidgets.QWidget):
 
         # Period switch uses the period's own lookback (custom date pickers
         # only apply when creating a chart, matching broker-app behavior).
-        tz = ZoneInfo(get_localzone_name())
+        tz = _query_tz(vt_symbol)
         end = datetime.now(tz)
         start = end - timedelta(days=lookback)
         self.chart_engine.query_history(vt_symbol, interval, start, end)
@@ -378,7 +401,7 @@ class ChartWizardWidget(QtWidgets.QWidget):
 
         # Date range: use the selected period's default lookback, unless
         # the user picked explicit custom dates in both pickers.
-        tz = ZoneInfo(get_localzone_name())
+        tz = _query_tz(vt_symbol)
         end = datetime.now(tz)
         start = end - timedelta(days=lookback)
         sd, ed = self.start_date.getDate(), self.end_date.getDate()

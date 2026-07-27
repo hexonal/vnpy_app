@@ -45,7 +45,9 @@ os.environ.setdefault("LANGUAGE", "zh_CN")
 os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.fonts=false")
 
 from fluent_ui import FluentMainWindow, create_fluent_qapp
+from fluent_ui.backtester_gates import install_gate_verdict
 from fluent_ui.backtester_metrics import install_extra_metrics
+from fluent_ui.backtester_segments import install_segment_notice
 from fluent_ui.gateway_config import load_all_configs
 from vnpy.event import EventEngine
 from vnpy.trader.engine import MainEngine
@@ -164,6 +166,35 @@ def main() -> None:
     added_metrics = install_extra_metrics()
     if added_metrics:
         main_engine.write_log(f"回测统计面板已补充指标: {', '.join(added_metrics)}")
+
+    # 参数寻优的 DSR / PBO 闸已经在 vnpy_ctastrategy 里算好并挂在返回值的 .gates
+    # 上，但回测器界面只渲染"参数 / 目标值"两列 —— 用户照着排第一的那行用，而闸的
+    # 结论（"这是从 N 组里挑出来的，扣掉选择偏差后不显著"）根本没上屏。这里把裁决
+    # 接到寻优结束的日志块和优化结果对话框顶部。
+    #
+    # 必须在建主窗口之前装：BacktesterManager.__init__ 里 register_event() 会把
+    # process_optimization_finished_event 绑到信号上，绑定发生在连接那一刻，
+    # 之后再打补丁对已建好的实例无效。
+    installed_gates = install_gate_verdict()
+    if installed_gates:
+        main_engine.write_log(f"寻优多重比较闸已接入回测器界面: {len(installed_gates)} 处")
+
+    # Three-way in/out-of-sample backtesting (TRAIN/VALID/TEST) deliberately
+    # does NOT get a button here — the reasoning is in backtester_segments.py's
+    # module docstring, and its entry point is
+    # `python -m vnpy_ctastrategy.segment_cli`. What this call installs is the
+    # part the GUI *can* honestly do: print that command in the parameter form
+    # (with the current split and remaining TEST-peek budget when the ledger
+    # exists), and refuse to run [参数优化] over a window that overlaps the TEST
+    # segment — that button is a parameter scan, and scanning the test segment
+    # is exactly what turns it into in-sample data. Must run before the main
+    # window is built, or the already-constructed panel keeps the unwrapped
+    # methods.
+    installed_segment_hooks = install_segment_notice()
+    if installed_segment_hooks:
+        main_engine.write_log(
+            f"回测面板已接入三段闸: {', '.join(installed_segment_hooks)}"
+        )
 
     # Router startup audit — PAPER allows PaperAccountApp (loaded above); LIVE
     # skipped it (load_paper=False), so this passes and orders reach the trade
