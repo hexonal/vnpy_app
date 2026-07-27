@@ -34,7 +34,6 @@ os.environ.setdefault("LANGUAGE", "zh_CN")
 from vnpy.event import Event, EventEngine
 from vnpy.trader.engine import MainEngine
 from vnpy.trader.event import EVENT_LOG
-
 from vnpy_agentbridge.engine import IntentEngine
 from vnpy_agentbridge.mcp_bridge import build_mcp_bridge
 from vnpy_agentbridge.rules.confidence_rule import ConfidenceRule

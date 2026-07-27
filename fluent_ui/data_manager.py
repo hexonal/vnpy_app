@@ -37,24 +37,23 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from functools import partial
+from zoneinfo import available_timezones
 
 from qfluentwidgets import (
     CalendarPicker,
-    EditableComboBox,
     LineEdit,
     MessageBox,
     PushButton,
     TableWidget,
     TreeWidget,
 )
-
+from vnpy.event import EventEngine
 from vnpy.trader.constant import Exchange, Interval
 from vnpy.trader.database import DB_TZ
-from vnpy.trader.engine import EventEngine, MainEngine
+from vnpy.trader.engine import MainEngine
 from vnpy.trader.locale import _
 from vnpy.trader.object import BarData, ContractData
 from vnpy.trader.ui import QtCore, QtWidgets
-from vnpy.trader.utility import available_timezones
 from vnpy_datamanager.engine import APP_NAME, BarOverview, ManagerEngine
 from vnpy_gatewaykit.query_window import localize_bound
 
@@ -122,7 +121,10 @@ class ManagerWidget(QtWidgets.QWidget):
         self.setLayout(vbox)
 
     def init_tree(self) -> None:
-        labels = [_("数据"), _("本地代码"), _("代码"), _("交易所"), _("数据量"), _("开始时间"), _("结束时间"), "", "", ""]
+        labels = [
+            _("数据"), _("本地代码"), _("代码"), _("交易所"), _("数据量"),
+            _("开始时间"), _("结束时间"), "", "", "",
+        ]
 
         self.tree = TreeWidget()
         self.tree.setColumnCount(len(labels))
@@ -137,7 +139,10 @@ class ManagerWidget(QtWidgets.QWidget):
         self.tree.header().setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
 
     def init_table(self) -> None:
-        labels = [_("时间"), _("开盘价"), _("最高价"), _("最低价"), _("收盘价"), _("成交量"), _("成交额"), _("持仓量")]
+        labels = [
+            _("时间"), _("开盘价"), _("最高价"), _("最低价"),
+            _("收盘价"), _("成交量"), _("成交额"), _("持仓量"),
+        ]
 
         self.table = TableWidget()
         self.table.setColumnCount(len(labels))
@@ -179,16 +184,34 @@ class ManagerWidget(QtWidgets.QWidget):
 
             output_button = PushButton(_("导出"))
             output_button.clicked.connect(
-                partial(self.output_data, overview.symbol, overview.exchange, overview.interval, overview.start, overview.end)
+                partial(
+                    self.output_data,
+                    overview.symbol,
+                    overview.exchange,
+                    overview.interval,
+                    overview.start,
+                    overview.end,
+                )
             )
 
             show_button = PushButton(_("查看"))
             show_button.clicked.connect(
-                partial(self.show_data, overview.symbol, overview.exchange, overview.interval, overview.start, overview.end)
+                partial(
+                    self.show_data,
+                    overview.symbol,
+                    overview.exchange,
+                    overview.interval,
+                    overview.start,
+                    overview.end,
+                )
             )
 
             delete_button = PushButton(_("删除"))
-            delete_button.clicked.connect(partial(self.delete_data, overview.symbol, overview.exchange, overview.interval))
+            delete_button.clicked.connect(
+                partial(
+                    self.delete_data, overview.symbol, overview.exchange, overview.interval
+                )
+            )
 
             self.tree.setItemWidget(item, 7, show_button)
             self.tree.setItemWidget(item, 8, output_button)
@@ -234,7 +257,14 @@ class ManagerWidget(QtWidgets.QWidget):
         )
         self._show_message(_("载入成功！"), msg)
 
-    def output_data(self, symbol: str, exchange: Exchange, interval: Interval, start: datetime, end: datetime) -> None:
+    def output_data(
+        self,
+        symbol: str,
+        exchange: Exchange,
+        interval: Interval,
+        start: datetime,
+        end: datetime,
+    ) -> None:
         dialog = DateRangeDialog(start, end)
         n = dialog.exec()
         if n != dialog.DialogCode.Accepted:
@@ -254,9 +284,19 @@ class ManagerWidget(QtWidgets.QWidget):
             localize_bound(end, exchange),
         )
         if not result:
-            self._show_message(_("导出失败！"), _("该文件已在其他程序中打开，请关闭相关程序后再尝试导出数据。"))
+            self._show_message(
+                _("导出失败！"),
+                _("该文件已在其他程序中打开，请关闭相关程序后再尝试导出数据。"),
+            )
 
-    def show_data(self, symbol: str, exchange: Exchange, interval: Interval, start: datetime, end: datetime) -> None:
+    def show_data(
+        self,
+        symbol: str,
+        exchange: Exchange,
+        interval: Interval,
+        start: datetime,
+        end: datetime,
+    ) -> None:
         dialog = DateRangeDialog(start, end)
         n = dialog.exec()
         if n != dialog.DialogCode.Accepted:
@@ -294,24 +334,33 @@ class ManagerWidget(QtWidgets.QWidget):
             return
 
         count = self.engine.delete_bar_data(symbol, exchange, interval)
-        self._show_message(_("删除成功"), f"已删除{symbol} {exchange.value} {interval.value}共计{count}条数据")
+        self._show_message(
+            _("删除成功"),
+            f"已删除{symbol} {exchange.value} {interval.value}共计{count}条数据",
+        )
 
     def update_data(self) -> None:
         overviews: list[BarOverview] = self.engine.get_bar_overview()
         total = len(overviews)
-        count = 0
 
         dialog = QtWidgets.QProgressDialog(_("历史数据更新中"), _("取消"), 0, 100)
         dialog.setWindowTitle(_("更新进度"))
         dialog.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
         dialog.setValue(0)
 
-        for overview in overviews:
+        # count starts at 1 so the first finished download reports 1/total,
+        # exactly as the old `count = 0` + `count += 1` after the download did.
+        for count, overview in enumerate(overviews, 1):
             if dialog.wasCanceled():
                 break
 
-            self.engine.download_bar_data(overview.symbol, overview.exchange, overview.interval, overview.end, self.output)
-            count += 1
+            self.engine.download_bar_data(
+                overview.symbol,
+                overview.exchange,
+                overview.interval,
+                overview.end,
+                self.output,
+            )
             dialog.setValue(int(round(count / total * 100, 0)))
 
         dialog.close()
@@ -330,7 +379,9 @@ class ManagerWidget(QtWidgets.QWidget):
 
 
 class DateRangeDialog(QtWidgets.QDialog):
-    def __init__(self, start: datetime, end: datetime, parent: QtWidgets.QWidget | None = None) -> None:
+    def __init__(
+        self, start: datetime, end: datetime, parent: QtWidgets.QWidget | None = None
+    ) -> None:
         super().__init__(parent)
 
         self.setWindowTitle(_("选择数据区间"))
@@ -403,9 +454,9 @@ class ImportDialog(QtWidgets.QDialog):
             self.exchange_combo.addItem(str(i.name), userData=i)
 
         self.interval_combo = SearchableComboBox()
-        for i in Interval:
-            if i != Interval.TICK:
-                self.interval_combo.addItem(str(i.name), userData=i)
+        for interval in Interval:
+            if interval != Interval.TICK:
+                self.interval_combo.addItem(str(interval.name), userData=interval)
 
         self.tz_combo = SearchableComboBox()
         self.tz_combo.addItems(available_timezones())
@@ -502,8 +553,8 @@ class DownloadDialog(QtWidgets.QDialog):
         self.symbol_combo.setPlaceholderText(_("输入代码搜索本地已知合约，或直接输入新代码"))
 
         self.interval_combo = SearchableComboBox()
-        for i in Interval:
-            self.interval_combo.addItem(str(i.name), userData=i)
+        for interval in Interval:
+            self.interval_combo.addItem(str(interval.name), userData=interval)
 
         end_dt = datetime.now()
         start_dt = end_dt - timedelta(days=3 * 365)

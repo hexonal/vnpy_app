@@ -47,8 +47,6 @@ called anything more, and real edge has to come from filters layered on top.
 # so an imported base class would show up in the "add strategy" dropdown.
 from datetime import time as _time
 
-import strategy_state
-
 from vnpy.trader.constant import Exchange, Interval
 from vnpy_ctastrategy import (
     ArrayManager,
@@ -60,6 +58,8 @@ from vnpy_ctastrategy import (
     TickData,
     TradeData,
 )
+
+import strategy_state
 
 # Local close, used to tell BarGenerator where a trading day ends when it
 # aggregates minute bars into daily ones. Both markets close at 16:00 local

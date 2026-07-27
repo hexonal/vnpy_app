@@ -13,8 +13,7 @@ three independent, unmistakable markings of the night session.
 
 from __future__ import annotations
 
-import pyqtgraph as pg  # type: ignore
-
+import pyqtgraph as pg
 from vnpy.chart.base import BAR_WIDTH, PEN_WIDTH
 from vnpy.chart.item import CandleItem
 from vnpy.chart.manager import BarManager

@@ -29,7 +29,10 @@ class _FakeCtaEngine:
     def send_order(self, strategy, direction, offset, price, volume, stop, lock, net) -> list:
         self._id += 1
         self.orders.append(
-            {"direction": direction, "offset": offset, "price": price, "volume": volume, "stop": stop}
+            {
+                "direction": direction, "offset": offset, "price": price,
+                "volume": volume, "stop": stop,
+            }
         )
         return [f"fake.{self._id}"]
 
@@ -58,7 +61,9 @@ def _make_strategy(**setting) -> tuple[LongOnlyTurtleStrategy, _FakeCtaEngine]:
     return strat, engine
 
 
-def _bar(dt: datetime, price: float, high: float | None = None, low: float | None = None) -> BarData:
+def _bar(
+    dt: datetime, price: float, high: float | None = None, low: float | None = None
+) -> BarData:
     return BarData(
         gateway_name="t", symbol="0700", exchange=Exchange.SEHK, datetime=dt,
         interval=Interval.DAILY, open_price=price,
@@ -97,16 +102,19 @@ def test_round_trip_pnl_tracks_for_filter() -> None:
     strat.pos = 100
     strat.on_trade(TradeData(gateway_name="t", symbol="0700", exchange=Exchange.SEHK,
                              orderid="1", tradeid="1", direction=Direction.LONG,
-                             offset=Offset.OPEN, price=10.0, volume=100, datetime=datetime(2026, 7, 1)))
+                             offset=Offset.OPEN, price=10.0, volume=100,
+                             datetime=datetime(2026, 7, 1)))
     strat.pos = 200
     strat.on_trade(TradeData(gateway_name="t", symbol="0700", exchange=Exchange.SEHK,
                              orderid="2", tradeid="2", direction=Direction.LONG,
-                             offset=Offset.OPEN, price=11.0, volume=100, datetime=datetime(2026, 7, 2)))
+                             offset=Offset.OPEN, price=11.0, volume=100,
+                             datetime=datetime(2026, 7, 2)))
     # Close all 200 @ 13 → PnL = (13 - 10.5) * 200 = 500.
     strat.pos = 0
     strat.on_trade(TradeData(gateway_name="t", symbol="0700", exchange=Exchange.SEHK,
                              orderid="3", tradeid="3", direction=Direction.SHORT,
-                             offset=Offset.CLOSE, price=13.0, volume=200, datetime=datetime(2026, 7, 3)))
+                             offset=Offset.CLOSE, price=13.0, volume=200,
+                             datetime=datetime(2026, 7, 3)))
     _assert("round-trip PnL = 500 (winner)", strat.last_trade_pnl == 500.0)
     _assert("cost tracker reset after close", strat._entry_vol == 0)
 
@@ -236,7 +244,6 @@ def test_strategy_runs_on_daily_bars_not_minutes() -> None:
     """
     import inspect
 
-    from vnpy.trader.constant import Interval
     from strategies.long_only_turtle_strategy import LongOnlyTurtleStrategy
 
     source = inspect.getsource(LongOnlyTurtleStrategy.on_init)

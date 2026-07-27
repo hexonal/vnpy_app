@@ -24,9 +24,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from typing import Any
 
 import psycopg
-
 from vnpy.trader.setting import SETTINGS
 
 _TABLE = "gateway_config"
@@ -50,7 +50,7 @@ class GatewayConfig:
     is_quote: bool = True
     is_trade: bool = False
     auto_connect: bool = False
-    setting: dict = field(default_factory=dict)
+    setting: dict[str, Any] = field(default_factory=dict)
 
 
 def _conninfo() -> str:
@@ -70,21 +70,20 @@ def _ensure_table(cur: psycopg.Cursor) -> None:
 def save_config(config: GatewayConfig) -> None:
     """Append one config row for this gateway (newest wins on read)."""
     try:
-        with psycopg.connect(_conninfo(), autocommit=True) as conn:
-            with conn.cursor() as cur:
-                _ensure_table(cur)
-                cur.execute(
-                    f"INSERT INTO {_TABLE} "
-                    "(gateway_name, is_quote, is_trade, auto_connect, setting_json, ts) "
-                    "VALUES (%s, %s, %s, %s, %s, now())",
-                    (
-                        config.gateway_name,
-                        config.is_quote,
-                        config.is_trade,
-                        config.auto_connect,
-                        json.dumps(config.setting, ensure_ascii=False),
-                    ),
-                )
+        with psycopg.connect(_conninfo(), autocommit=True) as conn, conn.cursor() as cur:
+            _ensure_table(cur)
+            cur.execute(
+                f"INSERT INTO {_TABLE} "
+                "(gateway_name, is_quote, is_trade, auto_connect, setting_json, ts) "
+                "VALUES (%s, %s, %s, %s, %s, now())",
+                (
+                    config.gateway_name,
+                    config.is_quote,
+                    config.is_trade,
+                    config.auto_connect,
+                    json.dumps(config.setting, ensure_ascii=False),
+                ),
+            )
     except Exception as exc:  # noqa: BLE001 — config persistence must never crash the connect flow
         print(f"[gateway_config] 保存到 QuestDB 失败(不影响本次连接): {exc}")
 
@@ -92,16 +91,15 @@ def save_config(config: GatewayConfig) -> None:
 def load_config(gateway_name: str) -> GatewayConfig | None:
     """Newest saved config for one gateway, or None if never saved."""
     try:
-        with psycopg.connect(_conninfo(), autocommit=True) as conn:
-            with conn.cursor() as cur:
-                _ensure_table(cur)
-                cur.execute(
-                    f"SELECT gateway_name, is_quote, is_trade, auto_connect, setting_json "
-                    f"FROM {_TABLE} WHERE gateway_name = %s "
-                    "LATEST ON ts PARTITION BY gateway_name",
-                    (gateway_name,),
-                )
-                row = cur.fetchone()
+        with psycopg.connect(_conninfo(), autocommit=True) as conn, conn.cursor() as cur:
+            _ensure_table(cur)
+            cur.execute(
+                f"SELECT gateway_name, is_quote, is_trade, auto_connect, setting_json "
+                f"FROM {_TABLE} WHERE gateway_name = %s "
+                "LATEST ON ts PARTITION BY gateway_name",
+                (gateway_name,),
+            )
+            row = cur.fetchone()
     except Exception as exc:  # noqa: BLE001
         print(f"[gateway_config] 从 QuestDB 读取失败: {exc}")
         return None
@@ -117,14 +115,13 @@ def load_all_configs() -> list[GatewayConfig]:
     """Newest config for every gateway ever saved — used at startup to
     decide what to auto-connect."""
     try:
-        with psycopg.connect(_conninfo(), autocommit=True) as conn:
-            with conn.cursor() as cur:
-                _ensure_table(cur)
-                cur.execute(
-                    f"SELECT gateway_name, is_quote, is_trade, auto_connect, setting_json "
-                    f"FROM {_TABLE} LATEST ON ts PARTITION BY gateway_name"
-                )
-                rows = cur.fetchall()
+        with psycopg.connect(_conninfo(), autocommit=True) as conn, conn.cursor() as cur:
+            _ensure_table(cur)
+            cur.execute(
+                f"SELECT gateway_name, is_quote, is_trade, auto_connect, setting_json "
+                f"FROM {_TABLE} LATEST ON ts PARTITION BY gateway_name"
+            )
+            rows = cur.fetchall()
     except Exception as exc:  # noqa: BLE001
         print(f"[gateway_config] 从 QuestDB 读取全部配置失败: {exc}")
         return []
@@ -132,5 +129,7 @@ def load_all_configs() -> list[GatewayConfig]:
     configs: list[GatewayConfig] = []
     for name, is_quote, is_trade, auto_connect, setting_json in rows:
         setting = json.loads(setting_json) if setting_json else {}
-        configs.append(GatewayConfig(name, bool(is_quote), bool(is_trade), bool(auto_connect), setting))
+        configs.append(
+            GatewayConfig(name, bool(is_quote), bool(is_trade), bool(auto_connect), setting)
+        )
     return configs

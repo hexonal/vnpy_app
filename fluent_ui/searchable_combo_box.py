@@ -18,7 +18,6 @@ direction of coupling for what's really a small, generic Qt widget.
 from __future__ import annotations
 
 from qfluentwidgets import EditableComboBox
-
 from vnpy.trader.ui import QtCore, QtWidgets
 
 

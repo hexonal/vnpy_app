@@ -15,6 +15,7 @@ Run:  .venv/bin/python tests/test_strategy_state.py     (or via pytest)
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
@@ -26,10 +27,7 @@ from typing import Any, cast
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import strategy_state
 import vnpy_ctastrategy.engine as cta_engine_module
-from strategies.long_only_turtle_strategy import LongOnlyTurtleStrategy
-from strategy_state import DATETIME_CODEC, StateError, StatefulCtaTemplate
 from vnpy.event import Event, EventEngine
 from vnpy.trader.constant import Direction, Exchange, Interval, Offset, Product
 from vnpy.trader.engine import MainEngine
@@ -37,6 +35,10 @@ from vnpy.trader.event import EVENT_TRADE
 from vnpy.trader.object import BarData, ContractData, TickData, TradeData
 from vnpy_ctastrategy.base import EngineType
 from vnpy_ctastrategy.engine import CtaEngine
+
+import strategy_state
+from strategies.long_only_turtle_strategy import LongOnlyTurtleStrategy
+from strategy_state import DATETIME_CODEC, StateError, StatefulCtaTemplate
 
 # ---------------------------------------------------------------------------
 # harness
@@ -1097,10 +1099,9 @@ TESTS = [
 def main() -> int:
     for test in TESTS:
         print(test.__name__)
-        try:
+        # check() already recorded it; keep going to see everything
+        with contextlib.suppress(AssertionError):
             test()
-        except AssertionError:
-            pass  # check() already recorded it; keep going to see everything
         sys.stdout.flush()
 
     print()

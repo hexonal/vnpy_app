@@ -10,8 +10,8 @@ from datetime import datetime
 from enum import Enum
 
 from qfluentwidgets import LineEdit, PushButton, TableWidget
-
-from vnpy.trader.engine import EventEngine, MainEngine
+from vnpy.event import EventEngine
+from vnpy.trader.engine import MainEngine
 from vnpy.trader.locale import _
 from vnpy.trader.object import ContractData
 from vnpy.trader.ui import QtWidgets
@@ -79,10 +79,7 @@ class ContractManager(QtWidgets.QWidget):
         flt = str(self.filter_line.text())
 
         all_contracts: list[ContractData] = self.main_engine.get_all_contracts()
-        if flt:
-            contracts = [c for c in all_contracts if flt in c.vt_symbol]
-        else:
-            contracts = all_contracts
+        contracts = [c for c in all_contracts if flt in c.vt_symbol] if flt else all_contracts
 
         self.contract_table.clearContents()
         self.contract_table.setRowCount(len(contracts))
@@ -91,9 +88,10 @@ class ContractManager(QtWidgets.QWidget):
             for column, name in enumerate(self.headers.keys()):
                 value = getattr(contract, name)
 
-                if value in {None, 0, 0.0}:
+                if value in {None, 0}:
                     value = ""
 
+                cell: BaseCell
                 if isinstance(value, Enum):
                     cell = EnumCell(value, contract)
                 elif isinstance(value, datetime):

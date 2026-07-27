@@ -105,7 +105,10 @@ def test_clicking_period_reloads_active_chart() -> None:
     fake._on_period_changed("周")  # user clicks 周
     _assert("chart cleared once", chart.cleared == 1)
     _assert("interval switched to WEEKLY", fake.chart_intervals["0700.SEHK"] == Interval.WEEKLY)
-    _assert("history re-queried at WEEKLY", fake.chart_engine.history_calls[-1][1] == Interval.WEEKLY)
+    _assert(
+        "history re-queried at WEEKLY",
+        fake.chart_engine.history_calls[-1][1] == Interval.WEEKLY,
+    )
     _assert("tab text updated to 周", fake.tab.tabText(0) == "0700.SEHK · 周")
     _assert("live-bar state reset", "0700.SEHK" not in fake.running_bars)
     _assert("current period is 周", fake._current_period == "周")
@@ -162,10 +165,11 @@ class _PlotChart:
         return self._plot
 
 
-def _bar(exchange, hour: int) -> "object":
+def _bar(exchange, hour: int) -> object:
+    from datetime import datetime
+
     from vnpy.trader.constant import Interval
     from vnpy.trader.object import BarData
-    from datetime import datetime
     return BarData(
         gateway_name="T", symbol="X", exchange=exchange,
         datetime=datetime(2026, 7, 24, hour, 0), interval=Interval.MINUTE,
@@ -221,11 +225,16 @@ def test_market_filter_narrows_symbol_picker_by_exchange() -> None:
         symbol_line=_FakeSymbolCombo(),
     )
     fake._vt_exchange = ChartWizardWidget._vt_exchange  # staticmethod
-    for name in ("_matches_market", "_rebuild_symbol_list", "_on_market_changed", "_add_symbol_if_new"):
+    for name in (
+        "_matches_market", "_rebuild_symbol_list", "_on_market_changed", "_add_symbol_if_new"
+    ):
         setattr(fake, name, MethodType(getattr(ChartWizardWidget, name), fake))
 
     labels = [m[0] for m in _MARKETS]
-    _assert("markets are 全部/港股/美股/沪市/深市", labels == ["全部", "港股", "美股", "沪市", "深市"])
+    _assert(
+        "markets are 全部/港股/美股/沪市/深市",
+        labels == ["全部", "港股", "美股", "沪市", "深市"],
+    )
 
     fake._on_market_changed(2)  # 美股 (SMART)
     _assert("美股 shows only SMART", fake.symbol_line.items == ["AAPL.SMART", "MU.SMART"])

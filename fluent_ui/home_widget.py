@@ -10,13 +10,13 @@ are this package's Fluent-native ones (see monitor.py, trading_widget.py).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from functools import partial
-from typing import Callable
 
-from qfluentwidgets import PushButton, RoundMenu
 from qfluentwidgets import Action as FluentAction
-
-from vnpy.trader.engine import EventEngine, MainEngine
+from qfluentwidgets import PushButton, RoundMenu
+from vnpy.event import EventEngine
+from vnpy.trader.engine import MainEngine
 from vnpy.trader.locale import _
 from vnpy.trader.ui import QtCore, QtWidgets
 
@@ -24,6 +24,7 @@ from .connect_dialog import ConnectDialog
 from .monitor import (
     AccountMonitor,
     ActiveOrderMonitor,
+    BaseMonitor,
     LogMonitor,
     OrderMonitor,
     PositionMonitor,
@@ -119,7 +120,7 @@ class HomeWidget(QtWidgets.QWidget):
 
     def init_menu(self) -> None:
         for name in self.main_engine.get_all_gateway_names():
-            func: Callable = partial(self.connect_gateway, name)
+            func: Callable[[], None] = partial(self.connect_gateway, name)
 
             action = FluentAction(_("连接{}").format(name))
             action.triggered.connect(func)
@@ -134,7 +135,7 @@ class HomeWidget(QtWidgets.QWidget):
         dialog = ConnectDialog(self.main_engine, gateway_name, self)
         dialog.exec()
 
-    def get_monitors(self) -> list:
+    def get_monitors(self) -> list[BaseMonitor]:
         """
         For FluentMainWindow.closeEvent() to persist column widths — stock
         mainwindow.py calls monitor.save_setting() on every dock monitor at

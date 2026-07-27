@@ -116,11 +116,29 @@ def test_the_refusal_names_the_way_out() -> None:
     assert combined  # 保底：进程真的产出了东西
 
 
+@pytest.mark.skipif(
+    not os.environ.get("VNPY_APP_ALLOW_SEGFAULT_TEST"),
+    reason=(
+        "本用例会**故意**让一个子进程段错误，而 macOS 每次都会为此写一份"
+        " ~/Library/Logs/DiagnosticReports/Python-*.ips 崩溃报告。"
+        "跑一次测试掉一份报告，看起来像项目在不停崩 —— 实测 25 份报告"
+        "全部来自这一条(特征一致：objc_opt_self + libqoffscreen)。"
+        "设 VNPY_APP_ALLOW_SEGFAULT_TEST=1 显式开启。"
+    ),
+)
 def test_allow_offscreen_is_a_real_escape_hatch() -> None:
     """逃生舱必须真的放行 —— 否则将来 qfluentwidgets 修好了也没法验证。
 
     放行的结果就是那个真段错误（139）。这里断言的正是"守卫没有一刀切"，
     所以退出码为 139 是**预期**行为，不是失败。
+
+    默认不跑：见上面 skipif 的理由。这条断言的价值是"将来能发现上游修好了"，
+    属于低频复核，不值得每次跑测试都在系统里留一份崩溃报告。想验证时：
+
+        VNPY_APP_ALLOW_SEGFAULT_TEST=1 pytest tests/test_fluent_offscreen_guard.py
+
+    守卫本身仍然每次都测 —— test_offscreen_refuses_instead_of_segfaulting
+    覆盖的正是"不再段错误"这个真正要防的回归，且它不产生崩溃报告。
     """
     proc = _run(_BUILD.format(repo=str(REPO), extra=", allow_offscreen=True"))
 

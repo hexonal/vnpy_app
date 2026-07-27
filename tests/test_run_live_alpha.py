@@ -21,12 +21,13 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import run_live_alpha
 from vnpy.event import EventEngine
 from vnpy.trader.constant import Exchange
 from vnpy.trader.gateway import BaseGateway
 from vnpy.trader.object import CancelRequest, OrderRequest, SubscribeRequest
 from vnpy_alphakit.rules import GATE_RULE_NAMES
+
+import run_live_alpha
 
 
 class RecordingGateway(BaseGateway):

@@ -1,0 +1,149 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # 私有兄弟包要 token 才装得到。没有 token 时只跑 lint —— 那一步不需要装依赖。
+  HAS_TOKEN: ${{ secrets.VNPY_CI_TOKEN != '' }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install lint tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff
+
+      # lint 不需要装任何依赖，所以永远跑得了 —— 没有 token 时它就是全部保障。
+      # 规则集与目标版本都钉在本仓 pyproject.toml 的 [tool.ruff] 里，不靠这里的
+      # 命令行参数，也不会沿目录树往上读到别的仓的配置。
+      - name: Lint
+        run: ruff check .
+
+      # 这些 checkout 必须排在 Lint 之后：它们把别的仓解到 _deps/ 里，
+      # 而 `ruff check .` 是对整个工作目录跑的，提前解出来就会去 lint 兄弟仓。
+      - name: Checkout private siblings
+        if: env.HAS_TOKEN == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: hexonal/vnpy_gatewaykit
+          path: _deps/vnpy_gatewaykit
+          token: ${{ secrets.VNPY_CI_TOKEN }}
+
+      # fluent_ui 直接 import 的私有兄弟包不止 gatewaykit：vnpy 本体（fork）、
+      # ctastrategy（闸/分段）、alphakit（install_gate_rules）、futu/usmart
+      # 两个网关。少一个，Type check 与 Test 就会以 import 错误红着，而不是
+      # 因为本仓代码真有问题。
+      - name: Checkout vnpy fork
+        if: env.HAS_TOKEN == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: hexonal/vnpy
+          path: _deps/vnpy
+          token: ${{ secrets.VNPY_CI_TOKEN }}
+
+      - name: Checkout vnpy_ctastrategy
+        if: env.HAS_TOKEN == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: hexonal/vnpy_ctastrategy
+          path: _deps/vnpy_ctastrategy
+          token: ${{ secrets.VNPY_CI_TOKEN }}
+
+      - name: Checkout vnpy_alphakit
+        if: env.HAS_TOKEN == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: hexonal/vnpy_alphakit
+          path: _deps/vnpy_alphakit
+          token: ${{ secrets.VNPY_CI_TOKEN }}
+
+      - name: Checkout vnpy_futu
+        if: env.HAS_TOKEN == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: hexonal/vnpy_futu
+          path: _deps/vnpy_futu
+          token: ${{ secrets.VNPY_CI_TOKEN }}
+
+      - name: Checkout vnpy_usmart
+        if: env.HAS_TOKEN == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: hexonal/vnpy_usmart
+          path: _deps/vnpy_usmart
+          token: ${{ secrets.VNPY_CI_TOKEN }}
+
+      # 没有 `pip install -e .` 这一步：vnpy_app 是应用目录不是发行包，
+      # pyproject.toml 里没有 [project]/[build-system]，装不了也不该装。
+      # 测试自己往 sys.path 塞了仓根（见 tests/*.py 顶部），import 得到
+      # fluent_ui / strategies / data_tools。
+      - name: Install package
+        if: env.HAS_TOKEN == 'true'
+        run: |
+          pip install mypy pytest
+          pip install "-e _deps/vnpy[alpha]"
+          pip install -e _deps/vnpy_gatewaykit
+          pip install -e _deps/vnpy_ctastrategy
+          pip install -e _deps/vnpy_alphakit
+          pip install -e _deps/vnpy_futu
+          pip install -e _deps/vnpy_usmart
+          # 公开的 App/网关/UI 依赖，PyPI 直接装。
+          pip install \
+            PySide6 \
+            "PySide6-Fluent-Widgets" \
+            pyqtgraph \
+            tzlocal \
+            psycopg \
+            vnpy_chartwizard \
+            vnpy_ctabacktester \
+            vnpy_datamanager \
+            vnpy_paperaccount \
+            vnpy_riskmanager
+
+      - name: Type check
+        if: env.HAS_TOKEN == 'true'
+        run: mypy --strict fluent_ui
+
+      # 这一步是本 workflow 存在的主要理由：vnpy 与 vnpy_ctastrategy 的既有 CI
+      # 只跑 ruff/mypy/build，一个用例都不执行。
+      #
+      # QT_QPA_PLATFORM=offscreen：fluent_ui 全是 Qt widget，用例要真的
+      # create_qapp() 并 grab() 位图，而 runner 上没有 X/Wayland；不设这个
+      # 变量，Qt 找不到平台插件会直接 abort（不是抛异常，抓不到）。
+      # 用 offscreen 而不是 xvfb，是因为本仓测试已经按无显示环境写好了
+      # （tests/*.py 顶部自己 setdefault 了同一个变量，见
+      # tests/test_fluent_offscreen_guard.py 与 README「无显示环境下不能用
+      # FluentMainWindow」一节）。
+      - name: Test
+        if: env.HAS_TOKEN == 'true'
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: pytest tests -q
+
+      - name: Notice when siblings are unavailable
+        if: env.HAS_TOKEN != 'true'
+        run: |
+          echo "::notice::未配置 VNPY_CI_TOKEN，本轮只跑了 lint。"
+          echo "::notice::类型检查与测试需要读取私有兄弟仓(vnpy_gatewaykit 等)，"
+          echo "::notice::请创建一个对 hexonal/vnpy_* 有 Contents:read 权限的"
+          echo "::notice::fine-grained PAT，存为仓库 secret VNPY_CI_TOKEN。"

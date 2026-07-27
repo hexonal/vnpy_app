@@ -7,8 +7,9 @@ one tabbed section instead of each getting its own full nav page.
 
 from __future__ import annotations
 
-from qfluentwidgets import Pivot
+from typing import cast
 
+from qfluentwidgets import Pivot
 from vnpy.trader.ui import QtCore, QtWidgets
 
 
@@ -45,5 +46,9 @@ class PivotWidgdet(QtWidgets.QWidget):
             self.pivot.setCurrentItem(widget.objectName())
 
     def on_current_index_changed(self, index: int) -> None:
-        widget = self.stacked_widget.widget(index)
+        # QStackedWidget.widget() is typed `QWidget | None`; this slot only
+        # fires for an index the stack actually holds, so the None arm is
+        # unreachable. cast, not an `if` — adding a guard here would change
+        # behaviour (silently no-op) instead of just narrowing the type.
+        widget = cast("QtWidgets.QWidget", self.stacked_widget.widget(index))
         self.pivot.setCurrentItem(widget.objectName())

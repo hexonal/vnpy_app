@@ -11,11 +11,14 @@ vnpy_app/vnpy_futu/vnpy_agentbridge.
 
 from __future__ import annotations
 
-from tzlocal import get_localzone_name
+from datetime import datetime
+from enum import Enum
+from typing import cast
+from zoneinfo import ZoneInfo
 
+from tzlocal import get_localzone_name
 from vnpy.trader.constant import Direction
 from vnpy.trader.ui import QtCore, QtGui, QtWidgets
-from vnpy.trader.utility import ZoneInfo
 
 COLOR_LONG = QtGui.QColor("red")
 COLOR_SHORT = QtGui.QColor("green")
@@ -41,7 +44,7 @@ class BaseCell(QtWidgets.QTableWidgetItem):
 class EnumCell(BaseCell):
     def set_content(self, content: object, data: object) -> None:
         if content:
-            super().set_content(content.value, data)
+            super().set_content(cast("Enum", content).value, data)
 
 
 class DirectionCell(EnumCell):
@@ -81,10 +84,10 @@ class TimeCell(BaseCell):
         if content is None:
             return
 
-        content = content.astimezone(self.local_tz)
-        timestamp: str = content.strftime("%H:%M:%S")
+        moment = cast("datetime", content).astimezone(self.local_tz)
+        timestamp: str = moment.strftime("%H:%M:%S")
 
-        millisecond: int = int(content.microsecond / 1000)
+        millisecond: int = int(moment.microsecond / 1000)
         timestamp = f"{timestamp}.{millisecond}" if millisecond else f"{timestamp}.000"
 
         self.setText(timestamp)
@@ -95,11 +98,13 @@ class DateCell(BaseCell):
     def set_content(self, content: object, data: object) -> None:
         if content is None:
             return
-        self.setText(content.strftime("%Y-%m-%d"))
+        self.setText(cast("datetime", content).strftime("%Y-%m-%d"))
         self._data = data
 
 
 class MsgCell(BaseCell):
     def __init__(self, content: str, data: object) -> None:
         super().__init__(content, data)
-        self.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter)
+        self.setTextAlignment(
+            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )

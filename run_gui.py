@@ -44,24 +44,24 @@ os.environ.setdefault("LANGUAGE", "zh_CN")
 # surfaces. Must be set before the first Qt import.
 os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.fonts=false")
 
-from fluent_ui import FluentMainWindow, create_fluent_qapp
-from fluent_ui.backtester_gates import install_gate_verdict
-from fluent_ui.backtester_metrics import install_extra_metrics
-from fluent_ui.backtester_segments import install_segment_notice
-from fluent_ui.gateway_config import load_all_configs
 from vnpy.event import EventEngine
 from vnpy.trader.engine import MainEngine
 from vnpy.trader.utility import get_file_path
 from vnpy_alphakit.rules import install_gate_rules
 from vnpy_chartwizard import ChartWizardApp
 from vnpy_ctabacktester import CtaBacktesterApp
+from vnpy_ctastrategy import CtaStrategyApp
 from vnpy_datamanager import DataManagerApp
+from vnpy_futu import FutuGateway
 from vnpy_paperaccount import PaperAccountApp
 from vnpy_riskmanager import RiskManagerApp
-
-from vnpy_ctastrategy import CtaStrategyApp
-from vnpy_futu import FutuGateway
 from vnpy_usmart import UsmartGateway
+
+from fluent_ui import FluentMainWindow, create_fluent_qapp
+from fluent_ui.backtester_gates import install_gate_verdict
+from fluent_ui.backtester_metrics import install_extra_metrics
+from fluent_ui.backtester_segments import install_segment_notice
+from fluent_ui.gateway_config import load_all_configs
 
 
 def main() -> None:

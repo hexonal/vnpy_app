@@ -12,12 +12,12 @@ now-unstyled Qt widget once qdarkstyle was removed.
 from __future__ import annotations
 
 import csv
-from typing import Any
+from collections import deque
+from typing import Any, cast
 
 from qfluentwidgets import TableWidget
-
-from vnpy.event import Event
-from vnpy.trader.engine import EventEngine, MainEngine
+from vnpy.event import Event, EventEngine
+from vnpy.trader.engine import MainEngine
 from vnpy.trader.event import (
     EVENT_ACCOUNT,
     EVENT_LOG,
@@ -27,8 +27,6 @@ from vnpy.trader.event import (
     EVENT_TRADE,
 )
 from vnpy.trader.locale import _
-from collections import deque
-
 from vnpy.trader.object import CancelRequest, OrderData
 from vnpy.trader.ui import QtCore, QtGui, QtWidgets
 
@@ -39,7 +37,7 @@ class BaseMonitor(TableWidget):
     event_type: str = ""
     data_key: str = ""
     sorting: bool = False
-    headers: dict = {}
+    headers: dict[str, dict[str, Any]] = {}
 
     # Row cap for insert-only monitors (data_key == "", i.e. LogMonitor/
     # TradeMonitor): stock vnpy grows these one row per event for the life
@@ -57,7 +55,7 @@ class BaseMonitor(TableWidget):
 
         self.main_engine = main_engine
         self.event_engine = event_engine
-        self.cells: dict[str, dict] = {}
+        self.cells: dict[str, dict[str, Any]] = {}
 
         # FIFO of column-0 QTableWidgetItems in insertion order, oldest at
         # the right end. Only used by insert-only monitors (data_key == "")
@@ -67,7 +65,7 @@ class BaseMonitor(TableWidget):
         # row happens to sit last in a user-applied sort order (which is
         # what a positional removeRow(rowCount()-1) would wrongly delete on
         # a sortable insert-only monitor like TradeMonitor).
-        self._insert_order: deque = deque()
+        self._insert_order: deque[QtWidgets.QTableWidgetItem] = deque()
 
         self.init_ui()
         self.load_setting()
@@ -97,7 +95,9 @@ class BaseMonitor(TableWidget):
         # instead of leaving most of it as dead space next to a clipped
         # first column.
         self.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.Stretch)
-        self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding)
+        self.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding
+        )
         # Floor so a splitter pane can't crush a table to zero height
         # (a monitor collapsed to an invisible sliver looks like a bug);
         # the splitter can still shrink it to this and no further.
@@ -153,7 +153,7 @@ class BaseMonitor(TableWidget):
 
         self.insertRow(0)
 
-        row_cells: dict = {}
+        row_cells: dict[str, Any] = {}
         first_cell: QtWidgets.QTableWidgetItem | None = None
         for column, header in enumerate(self.headers.keys()):
             setting = self.headers[header]
@@ -306,7 +306,7 @@ class OrderMonitor(BaseMonitor):
         self.itemDoubleClicked.connect(self.cancel_order)
 
     def cancel_order(self, cell: BaseCell) -> None:
-        order: OrderData = cell.get_data()
+        order = cast("OrderData", cell.get_data())
         req: CancelRequest = order.create_cancel_request()
         self.main_engine.cancel_order(req, order.gateway_name)
 

@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from fluent_ui.backtester_metrics import (      # noqa: E402
+from fluent_ui.backtester_metrics import (  # noqa: E402
     EXTRA_STATISTICS_LABELS,
     install_extra_metrics,
 )

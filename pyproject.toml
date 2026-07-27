@@ -1,32 +1,30 @@
 # vnpy_app is an application directory, not a distributable package — there is
 # no [project]/[build-system] table because nothing builds a wheel from it.
 # This file exists so `ruff check` has a config of its own.
-#
-# Without a [tool.ruff] table here, ruff walks up the filesystem and picks up
-# whatever config it finds in the *parent* directory — a different git
-# repository — so `ruff check` answered differently depending on where this
-# clone happened to live. Same reasoning as vnpy_alphakit's pyproject.toml,
-# and the settings below deliberately mirror it.
 
+# 显式钉住 lint 目标版本，不要落到仓外去找配置。
+#
+# 没有这一段时 ruff 会沿目录树往上找，在开发机上读到
+# /Users/flink/tradingview/pyproject.toml（那份 requires-python 是 >=3.12），
+# 而 CI 里根本没有那个父目录 —— 同一份代码于是在两处得到不同诊断。
+# 方向也危险：py312 下 UP017 会建议把 timezone.utc 换成 datetime.UTC，
+# 而后者是 CPython 3.11 才有的，本仓 requires-python 是 >=3.10，
+# 照做会让包在它自己声称支持的最老解释器上 import 就崩。
 [tool.ruff]
 target-version = "py310"
 line-length = 100
+# 只影响诊断的打印格式，不影响判定，也不放宽任何规则。
 output-format = "full"
 
 [tool.ruff.lint]
 # CLAUDE.md §13.25: style findings are bugs, and the rule set is fixed at
 # E,W,F,B,SIM,UP,I. Narrowing the select list is how a package reports a
 # clean run it has not earned.
-select = [
-    "B",    # flake8-bugbear
-    "E",    # pycodestyle error
-    "F",    # pyflakes
-    "I",    # isort
-    "SIM",  # flake8-simplify
-    "UP",   # pyupgrade
-    "W",    # pycodestyle warning
-]
+select = ["E", "W", "F", "B", "SIM", "UP", "I"]
 
+# 本仓是应用目录而非可安装包，ruff 无法从 [project] 推断哪些是本仓模块；
+# 不写死这份清单，同一份代码的 import 分组会随 ruff 的 src 推断而漂移。
+# 这不是放宽 —— I001 仍然全量生效。
 [tool.ruff.lint.isort]
 known-first-party = [
     "data_tools",
@@ -39,50 +37,45 @@ known-first-party = [
     "strategy_state",
 ]
 
-# ---------------------------------------------------------------------------
-# TODO(ruff-debt): pre-existing findings, fenced per file so they neither
-# block work nor disappear.
+# mypy: 对本仓代码严格，对没有类型信息的第三方包如实降级。
 #
-# The select list above went in after these files were written, so turning it
-# on produced 76 findings at once. Silencing them globally (`ignore = [...]`)
-# would switch the rule off for new code as well, which is the outcome this
-# config exists to prevent. Listing them per file instead means:
-#
-#   * every file below is capped at the rules it *already* violates — a new
-#     violation of any other rule in it still fails;
-#   * a file not listed below is held to the full rule set, so new files and
-#     the cleaned-up ones cannot regress;
-#   * the debt is enumerated rather than hidden, and each entry disappears the
-#     moment someone fixes that file.
-#
-# Paying it down: run `ruff check --fix` for the mechanical ones (I001, F401,
-# UP035/UP037, B033, SIM117), then delete the entry. E501/E402 need judgement
-# and are mostly in the Qt UI layer.
-# ---------------------------------------------------------------------------
-[tool.ruff.lint.per-file-ignores]
-"fluent_ui/backtester_metrics.py" = ["I001"]
-"fluent_ui/cells.py" = ["E501", "I001"]
-"fluent_ui/chart_wizard.py" = ["E402", "E501", "I001"]
-"fluent_ui/connect_dialog.py" = ["E501", "I001"]
-"fluent_ui/contract_manager.py" = ["B033", "I001", "SIM108"]
-"fluent_ui/data_manager.py" = ["E501", "F401", "I001", "SIM113"]
-"fluent_ui/gateway_config.py" = ["E501", "I001", "SIM117"]
-"fluent_ui/home_widget.py" = ["I001", "UP035"]
-"fluent_ui/mainwindow.py" = ["E501", "I001"]
-"fluent_ui/monitor.py" = ["E501", "I001"]
-"fluent_ui/pivot_widget.py" = ["I001"]
-"fluent_ui/searchable_combo_box.py" = ["I001"]
-"fluent_ui/session_candle.py" = ["I001"]
-"fluent_ui/trading_widget.py" = ["E501", "I001"]
-"replay_chart.py" = ["E501"]
-"run.py" = ["I001"]
-"run_gui.py" = ["I001"]
-"strategies/long_only_turtle_strategy.py" = ["I001"]
-"tests/test_backtester_metrics.py" = ["I001"]
-"tests/test_bulk_import.py" = ["I001"]
-"tests/test_chart_wizard_period_switch.py" = ["E501", "I001", "UP037"]
-"tests/test_long_only_turtle.py" = ["E501", "F401", "I001"]
-"tests/test_run_headless_gate_wiring.py" = ["I001"]
-"tests/test_run_live_alpha.py" = ["I001"]
-"tests/test_searchable_combo_box.py" = ["F401"]
-"tests/test_strategy_state.py" = ["I001", "SIM105"]
+# 这不是给自己的错误开后门 —— 下面五个包全部来自 site-packages 且不带
+# py.typed(pyqtgraph / qfluentwidgets 是第三方；vnpy_chartwizard /
+# vnpy_ctabacktester / vnpy_datamanager 是上游 vnpy 的 app 包)。mypy 对它们
+# 只能推出 Any，--strict 于是连带报 disallow_subclassing_any 与 has-type。
+# 我们自己的包不在此列：给 vnpy_ctastrategy 等 8 个仓补上 py.typed 之后，
+# 它们已经从 import-untyped 名单里消失了 —— 那才是这类问题的正解。
+[tool.mypy]
+python_version = "3.13"
+strict = true
+
+[[tool.mypy.overrides]]
+module = [
+    "pyqtgraph.*",
+    "qfluentwidgets.*",
+    "vnpy_chartwizard.*",
+    "vnpy_ctabacktester.*",
+    "vnpy_datamanager.*",
+]
+ignore_missing_imports = true
+
+# 只关掉一项检查，且只在真正继承了上述无类型基类的四个模块里。
+# 基类(FluentWindow / TableWidget / MessageBoxBase / EditableComboBox)在
+# qfluentwidgets 里没有类型信息，mypy 只能推成 Any，我们的子类必然触发
+# disallow_subclassing_any。正解是给 qfluentwidgets 写 stub，那是另一件事；
+# 在此之前把范围收到这四个文件，好过全局放宽 strict。
+[[tool.mypy.overrides]]
+module = [
+    "fluent_ui.mainwindow",
+    "fluent_ui.monitor",
+    "fluent_ui.connect_dialog",
+    "fluent_ui.searchable_combo_box",
+]
+disallow_subclassing_any = false
+
+# items / _currentIndex 是 EditableComboBox 的属性，基类是 Any，mypy 推不出
+# 它们的类型。不在子类里自行声明：那会在运行时遮蔽基类的真实属性，
+# 为了让检查器满意而改变行为是本末倒置。
+[[tool.mypy.overrides]]
+module = ["fluent_ui.searchable_combo_box"]
+disable_error_code = ["has-type"]

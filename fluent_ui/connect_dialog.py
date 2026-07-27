@@ -15,10 +15,16 @@ nothing regresses if QuestDB is unreachable.
 
 from __future__ import annotations
 
-from typing import cast
+from typing import Any, cast
 
-from qfluentwidgets import BodyLabel, CheckBox, EditableComboBox, LineEdit, MessageBoxBase, SubtitleLabel
-
+from qfluentwidgets import (
+    BodyLabel,
+    CheckBox,
+    EditableComboBox,
+    LineEdit,
+    MessageBoxBase,
+    SubtitleLabel,
+)
 from vnpy.trader.engine import MainEngine
 from vnpy.trader.locale import _
 from vnpy.trader.ui import QtGui, QtWidgets
@@ -28,7 +34,12 @@ from .gateway_config import GatewayConfig, load_config, save_config
 
 
 class ConnectDialog(MessageBoxBase):
-    def __init__(self, main_engine: MainEngine, gateway_name: str, parent: QtWidgets.QWidget | None = None) -> None:
+    def __init__(
+        self,
+        main_engine: MainEngine,
+        gateway_name: str,
+        parent: QtWidgets.QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
 
         self.main_engine = main_engine
@@ -42,8 +53,10 @@ class ConnectDialog(MessageBoxBase):
     def init_ui(self) -> None:
         self.title_label = SubtitleLabel(_("连接{}").format(self.gateway_name), self)
 
-        default_setting: dict | None = self.main_engine.get_default_setting(self.gateway_name)
-        loaded_setting: dict = load_json(self.filename)
+        default_setting: dict[str, Any] | None = self.main_engine.get_default_setting(
+            self.gateway_name
+        )
+        loaded_setting: dict[str, Any] = load_json(self.filename)
         saved_config: GatewayConfig | None = load_config(self.gateway_name)
 
         grid = QtWidgets.QGridLayout()
@@ -144,7 +157,7 @@ class ConnectDialog(MessageBoxBase):
         self.widget.setMinimumWidth(max(380, self.widget.sizeHint().width()))
 
     def connect_gateway(self) -> None:
-        setting: dict = {}
+        setting: dict[str, Any] = {}
 
         for field_name, (widget, field_type) in self.widgets.items():
             if field_type is list:

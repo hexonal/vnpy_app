@@ -143,7 +143,7 @@ def _pbo_line(report: OptimizationGateReport) -> str:
     不在这里另写一套 —— 同一份报告出现两个互相矛盾的结论，正是那边反复警告的事。
     """
     study = report.pbo
-    verdict = report.pbo_verdict
+    verdict: str = report.pbo_verdict
     if study is not None and study.null is None:
         return f"PBO={study.result.pbo:.3f} —— {verdict}"
     return verdict
@@ -334,7 +334,7 @@ def install_gate_verdict() -> list[str]:
             _log_verdict(self)
 
         setattr(process_optimization_finished_event, _INSTALLED_FLAG, True)
-        BacktesterManager.process_optimization_finished_event = (      # type: ignore[method-assign]
+        BacktesterManager.process_optimization_finished_event = (
             process_optimization_finished_event
         )
         installed.append("BacktesterManager.process_optimization_finished_event")
@@ -348,7 +348,7 @@ def install_gate_verdict() -> list[str]:
             _decorate_result_dialog(self)
 
         setattr(init_ui_with_verdict, _INSTALLED_FLAG, True)
-        OptimizationResultMonitor.init_ui = init_ui_with_verdict       # type: ignore[method-assign]
+        OptimizationResultMonitor.init_ui = init_ui_with_verdict
         installed.append("OptimizationResultMonitor.init_ui")
 
     return installed

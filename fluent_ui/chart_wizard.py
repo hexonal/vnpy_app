@@ -44,22 +44,25 @@ from __future__ import annotations
 
 from copy import copy
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pyqtgraph as pg
 from qfluentwidgets import CalendarPicker, ComboBox, MessageBox, PushButton, SegmentedWidget
 from tzlocal import get_localzone_name
-
 from vnpy.chart import ChartWidget, VolumeItem
 from vnpy.event import Event, EventEngine
 from vnpy.trader.constant import Exchange, Interval
 from vnpy.trader.engine import MainEngine
 from vnpy.trader.event import EVENT_CONTRACT, EVENT_TICK
 from vnpy.trader.locale import _
-from vnpy_gatewaykit.market_clock import market_tz
 from vnpy.trader.object import BarData, ContractData, SubscribeRequest, TickData
 from vnpy.trader.ui import QtCore, QtWidgets
-from vnpy.trader.utility import ZoneInfo
 from vnpy_chartwizard.engine import APP_NAME, EVENT_CHART_HISTORY, ChartWizardEngine
+from vnpy_gatewaykit.market_clock import market_tz
+
+from .market_session import is_extended
+from .searchable_combo_box import SearchableComboBox
+from .session_candle import SessionCandleItem
 
 # Broker-app-style period buttons: (label, vnpy Interval, default lookback
 # days). Order matches a broker app's tab strip: real-time first, then
@@ -123,10 +126,6 @@ def _query_tz(vt_symbol: str) -> ZoneInfo:
 _LIVE_ALIGNED_INTERVALS: frozenset[Interval] = frozenset(
     {Interval.MINUTE, Interval.DAILY, Interval.WEEKLY}
 )
-
-from .market_session import is_extended
-from .searchable_combo_box import SearchableComboBox
-from .session_candle import SessionCandleItem
 
 # Exchange filter for the symbol picker: (label, vt_symbol suffix). A None
 # suffix is 全部 (no filter). The suffixes are the vt_symbol exchange parts
@@ -390,7 +389,8 @@ class ChartWizardWidget(QtWidgets.QWidget):
             if not contract:
                 box = MessageBox(
                     _("找不到合约"),
-                    f"{vt_symbol}: 本地没有这个合约记录——先连接对应网关(合约查询会在连接成功后自动填充),再重试。",
+                    f"{vt_symbol}: 本地没有这个合约记录——先连接对应网关"
+                    "(合约查询会在连接成功后自动填充),再重试。",
                     self.window(),
                 )
                 box.hideCancelButton()

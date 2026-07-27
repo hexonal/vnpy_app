@@ -19,6 +19,11 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from vnpy.trader.constant import Exchange, Interval  # noqa: E402
+from vnpy.trader.object import BarData  # noqa: E402
+from vnpy_gatewaykit.bar_label import SOURCE_FUTU, to_start_label  # noqa: E402
+from vnpy_gatewaykit.market_clock import market_tz  # noqa: E402
+
 from data_tools.bulk_import import (  # noqa: E402
     AmbiguousPolicy,
     AuctionPolicy,
@@ -36,10 +41,6 @@ from data_tools.bulk_import import (  # noqa: E402
     supported_exchanges,
     tasks_from_directory,
 )
-from vnpy.trader.constant import Exchange, Interval  # noqa: E402
-from vnpy.trader.object import BarData  # noqa: E402
-from vnpy_gatewaykit.bar_label import SOURCE_FUTU, to_start_label  # noqa: E402
-from vnpy_gatewaykit.market_clock import market_tz  # noqa: E402
 
 HK = ZoneInfo("Asia/Hong_Kong")
 NY = ZoneInfo("America/New_York")

@@ -7,20 +7,23 @@ every main_engine call are unchanged.
 
 from __future__ import annotations
 
-from qfluentwidgets import CheckBox, EditableComboBox, LineEdit, MessageBox, PushButton
+from typing import cast
 
-from vnpy.event import Event
+from qfluentwidgets import CheckBox, EditableComboBox, LineEdit, MessageBox, PushButton
+from vnpy.event import Event, EventEngine
 from vnpy.trader.constant import Direction, Exchange, Offset, OrderType
-from vnpy.trader.engine import EventEngine, MainEngine
+from vnpy.trader.engine import MainEngine
 from vnpy.trader.event import EVENT_TICK
 from vnpy.trader.locale import _
 from vnpy.trader.object import (
     CancelRequest,
     ContractData,
+    OrderData,
     OrderRequest,
     PositionData,
     SubscribeRequest,
     TickData,
+    TradeData,
 )
 from vnpy.trader.ui import QtCore, QtGui, QtWidgets
 from vnpy.trader.utility import get_digits
@@ -166,7 +169,9 @@ class TradingWidget(QtWidgets.QWidget):
         self.setFixedWidth(max(300, self.sizeHint().width()))
 
     def create_label(
-        self, color: str = "", alignment: QtCore.Qt.AlignmentFlag = QtCore.Qt.AlignmentFlag.AlignLeft
+        self,
+        color: str = "",
+        alignment: QtCore.Qt.AlignmentFlag = QtCore.Qt.AlignmentFlag.AlignLeft,
     ) -> QtWidgets.QLabel:
         label = QtWidgets.QLabel()
         if color:
@@ -255,13 +260,21 @@ class TradingWidget(QtWidgets.QWidget):
         self.lp_label.setText("")
         self.return_label.setText("")
 
-        for label in (self.bv1_label, self.bv2_label, self.bv3_label, self.bv4_label, self.bv5_label):
+        for label in (
+            self.bv1_label, self.bv2_label, self.bv3_label, self.bv4_label, self.bv5_label
+        ):
             label.setText("")
-        for label in (self.av1_label, self.av2_label, self.av3_label, self.av4_label, self.av5_label):
+        for label in (
+            self.av1_label, self.av2_label, self.av3_label, self.av4_label, self.av5_label
+        ):
             label.setText("")
-        for label in (self.bp1_label, self.bp2_label, self.bp3_label, self.bp4_label, self.bp5_label):
+        for label in (
+            self.bp1_label, self.bp2_label, self.bp3_label, self.bp4_label, self.bp5_label
+        ):
             label.setText("")
-        for label in (self.ap1_label, self.ap2_label, self.ap3_label, self.ap4_label, self.ap5_label):
+        for label in (
+            self.ap1_label, self.ap2_label, self.ap3_label, self.ap4_label, self.ap5_label
+        ):
             label.setText("")
 
     def _show_error(self, title: str, content: str) -> None:
@@ -307,7 +320,9 @@ class TradingWidget(QtWidgets.QWidget):
             self.main_engine.cancel_order(req, order.gateway_name)
 
     def update_with_cell(self, cell: BaseCell) -> None:
-        data = cell.get_data()
+        # 这个槽只由行情/委托/成交/持仓四张监控表双击触发，四者都带
+        # symbol/exchange；BaseCell.get_data() 的返回类型是 object。
+        data = cast("TickData | OrderData | TradeData | PositionData", cell.get_data())
 
         self.symbol_line.setText(data.symbol)
         self.exchange_combo.setCurrentIndex(self.exchange_combo.findText(data.exchange.value))

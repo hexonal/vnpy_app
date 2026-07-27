@@ -167,7 +167,7 @@ def _format_cell(key: str, value: Any, inference_ran: bool) -> Any:
     return f"{number:,.2f}"
 
 
-def format_statistics(data: dict) -> dict:
+def format_statistics(data: dict[str, Any]) -> dict[str, Any]:
     """返回一份【副本】，其中我们补进面板的键已格式化成文本。
 
     走副本而不是就地改：上游 `set_data()` 是就地把 `data["capital"]` 之类换成
@@ -175,7 +175,7 @@ def format_statistics(data: dict) -> dict:
     同一份结果显示第二次就会拿字符串去套 `:,.2f` 而抛。副本让引擎手里的数值保持
     是数值，重复显示也就不再是问题。
     """
-    formatted: dict = dict(data)
+    formatted: dict[str, Any] = dict(data)
     inference_ran: bool = (
         str(data.get("sharpe_method", NOT_COMPUTED_SENTINEL)) != NOT_COMPUTED_SENTINEL
     )
@@ -185,7 +185,7 @@ def format_statistics(data: dict) -> dict:
     return formatted
 
 
-def _safe_format(data: dict) -> dict:
+def _safe_format(data: dict[str, Any]) -> dict[str, Any]:
     """格式化失败就退回原始 dict —— 显示层的美化不该拖垮回测结果展示。"""
     try:
         return format_statistics(data)
@@ -193,22 +193,22 @@ def _safe_format(data: dict) -> dict:
         return data
 
 
-def _install_cell_formatter(monitor_cls: type) -> bool:
+def _install_cell_formatter(monitor_cls: Any) -> bool:
     """给 `StatisticsMonitor.set_data` 包一层格式化。返回是否真的包了。
 
     幂等靠包装函数上的标记：重复安装会叠两层，第二层拿到的已是字符串，
     `float()` 会失败而把单元格退回原样（更糟的是格式化过的字符串再被加工）。
     """
-    original: Callable = monitor_cls.set_data
+    original: Callable[..., None] = monitor_cls.set_data
     if getattr(original, _FORMATTER_FLAG, False):
         return False
 
     @functools.wraps(original)
-    def set_data(self: Any, data: dict) -> None:
+    def set_data(self: Any, data: dict[str, Any]) -> None:
         original(self, _safe_format(data))
 
     set_data._extra_metrics_formatter = True        # type: ignore[attr-defined]
-    monitor_cls.set_data = set_data                 # type: ignore[attr-defined]
+    monitor_cls.set_data = set_data
     return True
 
 
@@ -225,7 +225,7 @@ def install_extra_metrics() -> list[str]:
     except ImportError:
         return []
 
-    key_map: dict = StatisticsMonitor.KEY_NAME_MAP
+    key_map: dict[str, str] = StatisticsMonitor.KEY_NAME_MAP
     added: list[str] = []
     for key, label in EXTRA_STATISTICS_LABELS.items():
         if key not in key_map:

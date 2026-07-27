@@ -208,7 +208,9 @@ class ReplayChartWidget(QtWidgets.QWidget):
 
         exchange: Exchange = self.exchange_combo.currentData()
         start = datetime(
-            self.start_edit.date().year(), self.start_edit.date().month(), self.start_edit.date().day()
+            self.start_edit.date().year(),
+            self.start_edit.date().month(),
+            self.start_edit.date().day(),
         )
         end = datetime(
             self.end_edit.date().year(), self.end_edit.date().month(), self.end_edit.date().day()
@@ -240,7 +242,9 @@ class ReplayChartWidget(QtWidgets.QWidget):
 
         self.cursor = 0
         self.aggregators = {
-            label: PeriodAggregator(Interval.MINUTE if minutes == 1 else Interval.HOUR, minutes, "REPLAY")
+            label: PeriodAggregator(
+                Interval.MINUTE if minutes == 1 else Interval.HOUR, minutes, "REPLAY"
+            )
             for label, minutes in PERIODS
         }
         # clear_all() resets each pane's BarManager and tells its existing

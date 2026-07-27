@@ -254,7 +254,7 @@ def install_segment_notice() -> list[str]:
 
     installed: list[str] = []
 
-    original_init_ui: Callable = BacktesterManager.init_ui
+    original_init_ui: Callable[[Any], None] = BacktesterManager.init_ui
     if not getattr(original_init_ui, _INSTALLED_FLAG, False):
 
         @functools.wraps(original_init_ui)
@@ -263,10 +263,10 @@ def install_segment_notice() -> list[str]:
             _attach_notice(self)
 
         setattr(init_ui, _INSTALLED_FLAG, True)
-        BacktesterManager.init_ui = init_ui      # type: ignore[method-assign]
+        BacktesterManager.init_ui = init_ui
         installed.append("BacktesterManager.init_ui")
 
-    original_optimization: Callable = BacktesterManager.start_optimization
+    original_optimization: Callable[[Any], None] = BacktesterManager.start_optimization
     if not getattr(original_optimization, _INSTALLED_FLAG, False):
 
         @functools.wraps(original_optimization)
@@ -275,12 +275,10 @@ def install_segment_notice() -> list[str]:
                 original_optimization(self)
 
         setattr(start_optimization, _INSTALLED_FLAG, True)
-        BacktesterManager.start_optimization = (     # type: ignore[method-assign]
-            start_optimization
-        )
+        BacktesterManager.start_optimization = start_optimization
         installed.append("BacktesterManager.start_optimization")
 
-    original_backtesting: Callable = BacktesterManager.start_backtesting
+    original_backtesting: Callable[[Any], None] = BacktesterManager.start_backtesting
     if not getattr(original_backtesting, _INSTALLED_FLAG, False):
 
         @functools.wraps(original_backtesting)
@@ -289,9 +287,7 @@ def install_segment_notice() -> list[str]:
             original_backtesting(self)
 
         setattr(start_backtesting, _INSTALLED_FLAG, True)
-        BacktesterManager.start_backtesting = (      # type: ignore[method-assign]
-            start_backtesting
-        )
+        BacktesterManager.start_backtesting = start_backtesting
         installed.append("BacktesterManager.start_backtesting")
 
     return installed

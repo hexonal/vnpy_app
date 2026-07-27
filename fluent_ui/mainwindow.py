@@ -36,9 +36,9 @@ from typing import cast
 
 from qfluentwidgets import FluentIcon as FIF
 from qfluentwidgets import FluentWindow, MessageBox, NavigationItemPosition, Theme, setTheme
-
 from vnpy.event import EventEngine
-from vnpy.trader.engine import BaseApp, EmailEngine, MainEngine
+from vnpy.trader.app import BaseApp
+from vnpy.trader.engine import EmailEngine, MainEngine
 from vnpy.trader.locale import _
 from vnpy.trader.setting import SETTINGS
 from vnpy.trader.ui import QtCore, QtGui, QtWidgets
@@ -49,7 +49,6 @@ from .chart_wizard import ChartWizardWidget as FluentChartWizardWidget
 from .contract_manager import ContractManager
 from .data_manager import ManagerWidget as FluentDataManagerWidget
 from .home_widget import HomeWidget
-
 
 # Keyed by BaseApp.app_name (e.g. "CtaStrategy", not the Chinese
 # display_name) so it survives locale changes. Every currently-installed
@@ -104,7 +103,8 @@ def _select_smooth_font() -> str:
     for candidate in candidates:
         if candidate in available:
             return candidate
-    return SETTINGS["font.family"]
+    fallback: str = SETTINGS["font.family"]
+    return fallback
 
 
 def create_fluent_qapp(app_name: str = "VeighNa Fluent") -> QtWidgets.QApplication:
@@ -207,7 +207,9 @@ class FluentMainWindow(FluentWindow):
         self.main_engine = main_engine
         self.event_engine = event_engine
 
-        setTheme(Theme.DARK)  # matches the qdarkstyle look this replaces; flip to Theme.LIGHT to match vnpy_evo's default
+        # matches the qdarkstyle look this replaces; flip to Theme.LIGHT to
+        # match vnpy_evo's default
+        setTheme(Theme.DARK)
 
         self.window_title = "VeighNa Fluent"
         self.setWindowTitle(self.window_title)
@@ -263,7 +265,7 @@ class FluentMainWindow(FluentWindow):
         for app in self.main_engine.get_all_apps():
             widget = self._build_app_widget(app)
             if widget is not None:
-                widget.setObjectName(app.app_name)
+                cast("QtWidgets.QWidget", widget).setObjectName(app.app_name)
                 self.app_widgets.append((app.app_name, app.display_name, widget))
 
     def init_navigation(self) -> None:
@@ -407,7 +409,8 @@ class FluentMainWindow(FluentWindow):
             if widget_class is None:
                 ui_module: ModuleType = import_module(app.app_module + ".ui")
                 widget_class = getattr(ui_module, app.widget_name)
-            return widget_class(self.main_engine, self.event_engine)
+            widget: object = widget_class(self.main_engine, self.event_engine)
+            return widget
         except Exception as exc:  # noqa: BLE001 — a broken third-party app widget must not take down the whole window
             self.main_engine.write_log(f"App[{app.display_name}] 界面加载失败,已跳过: {exc}")
             return None

@@ -23,7 +23,6 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import run as run_module
 from vnpy.event import EventEngine
 from vnpy.trader.constant import Direction, Exchange, OrderType, Product
 from vnpy.trader.engine import MainEngine
@@ -36,6 +35,8 @@ from vnpy.trader.object import (
 )
 from vnpy_alphakit.gate import attach_stop
 from vnpy_alphakit.rules import GATE_RULE_NAMES
+
+import run as run_module
 
 VT_SYMBOL = "HEADLESSGATE.SEHK"
 
