@@ -81,6 +81,14 @@ jobs:
           repository: hexonal/vnpy_futu
           path: _deps/vnpy_futu
 
+      # tests/test_run_headless_gate_wiring.py 按 run.py 的真实装载顺序接线，
+      # 其中包含 AgentBridge（LLM Agent 下单走的那条路），所以它是测试的硬依赖。
+      - name: Checkout vnpy_agentbridge
+        uses: actions/checkout@v7
+        with:
+          repository: hexonal/vnpy_agentbridge
+          path: _deps/vnpy_agentbridge
+
 
       # 没有 `pip install -e .` 这一步：vnpy_app 是应用目录不是发行包，
       # pyproject.toml 里没有 [project]/[build-system]，装不了也不该装。
@@ -94,6 +102,7 @@ jobs:
           pip install -e _deps/vnpy_ctastrategy
           pip install -e _deps/vnpy_alphakit
           pip install -e _deps/vnpy_futu
+          pip install -e _deps/vnpy_agentbridge
           # 公开的 App/网关/UI 依赖，PyPI 直接装。
           pip install \
             PySide6 \
