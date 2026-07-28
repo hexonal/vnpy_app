@@ -18,19 +18,28 @@
 （输入"腾讯"要能找到 700.SEHK）。但真正写进输入框的必须是 `NBIS.SMART`，
 带名称的整串不是合法本地代码。
 
-做法：匹配走显示文本（所以按名称搜得到），纯代码另存一个角色，选中时用
-`activated[QModelIndex]` 把它写回输入框，覆盖掉 QCompleter 默认插入的显示文本。
+做法：匹配走显示文本（所以按名称搜得到），纯代码另存一个角色，选中时按显示
+文本反查它写回输入框，覆盖掉 QCompleter 默认插入的显示文本。
 
 第一版试过"DisplayRole 给人看、EditRole 给补全用"，不成立：QStandardItem 把
 这两个角色存在同一处，`setData(..., EditRole)` 会把显示文本一并改掉 ——
 实测弹窗里名称消失、输入"腾讯"零结果。
+
+## 合约表必须按需刷新，不能开机快照一次
+
+回测面板是开机时建的，而网关的合约查询是异步的。实测启动日志：补丁装好与
+面板建成都在 10:07:33，四个市场的合约到 10:07:34~35 才陆续查完 —— 建面板
+时一个合约都还没有。而这个面板整个进程只建一次，快照下来的空表就再也不会
+更新，表现正是"打字没有任何反应"。
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from vnpy.trader.engine import MainEngine
+from vnpy.trader.object import ContractData
 from vnpy.trader.ui import QtCore, QtGui, QtWidgets
 
 _INSTALLED_FLAG = "_vnpy_app_symbol_search_installed"
@@ -41,38 +50,59 @@ _COMPLETER_ATTR = "_vnpy_app_symbol_completer"
 SYMBOL_ROLE = QtCore.Qt.ItemDataRole.UserRole + 1
 
 
-def build_symbol_model(main_engine: MainEngine, parent: QtCore.QObject) -> QtGui.QStandardItemModel:
-    """本地已知合约 -> 补全模型。显示 `代码.交易所 名称`，纯代码存 SYMBOL_ROLE。"""
-    model = QtGui.QStandardItemModel(parent)
-    rows: list[tuple[str, str]] = []
-    for contract in main_engine.get_all_contracts():
-        vt_symbol = f"{contract.symbol}.{contract.exchange.value}"
-        name = (contract.name or "").strip()
-        rows.append((vt_symbol, f"{vt_symbol} {name}".rstrip()))
+def _symbol_rows(contracts: Sequence[ContractData]) -> list[tuple[str, str]]:
+    """合约 -> (纯本地代码, 显示文本) 列表，按代码排序。
 
-    for vt_symbol, display in sorted(rows):
-        item = QtGui.QStandardItem(display)
-        item.setData(vt_symbol, SYMBOL_ROLE)
-        model.appendRow(item)
-    return model
+    显示文本带名称：认得出是谁，也才搜得到（输入"腾讯"要能找到 700.SEHK）。
+    """
+    rows = [
+        (
+            f"{c.symbol}.{c.exchange.value}",
+            f"{c.symbol}.{c.exchange.value} {(c.name or '').strip()}".rstrip(),
+        )
+        for c in contracts
+    ]
+    return sorted(rows)
 
 
 def attach_completer(line: QtWidgets.QLineEdit, main_engine: MainEngine) -> int:
-    """给输入框装上合约补全，返回可补全的合约数。"""
-    model = build_symbol_model(main_engine, line)
+    """给输入框装上合约补全，返回装上那一刻的合约数（通常是 0，见下）。
+
+    合约列表不能只在这里取一次。回测面板是开机时建的，而网关的合约查询是
+    异步的 —— 实测启动日志：补丁装好与面板建成都在 10:07:33，四个市场的
+    合约到 10:07:34~35 才陆续查完。也就是说建面板时一个合约都还没有，
+    快照下来就是一张空表，而这个面板整个进程只建一次，于是永远搜不出东西。
+
+    改为每次打字前按需刷新：只有合约总数变了才重建，所以敲一串字符不会
+    反复重建两万多行。这样后连的网关也能自动补上，不必订阅事件。
+    """
+    model = QtGui.QStandardItemModel(line)
+    by_display: dict[str, str] = {}
+    counted = -1
+
+    def refresh() -> None:
+        nonlocal counted
+        contracts = main_engine.get_all_contracts()
+        if len(contracts) == counted:
+            return
+        counted = len(contracts)
+
+        model.clear()
+        by_display.clear()
+        for vt_symbol, display in _symbol_rows(contracts):
+            item = QtGui.QStandardItem(display)
+            item.setData(vt_symbol, SYMBOL_ROLE)
+            model.appendRow(item)
+            by_display[display] = vt_symbol
+
+    refresh()
+    line.textEdited.connect(lambda _text: refresh())
     completer = QtWidgets.QCompleter(model, line)
     completer.setCaseSensitivity(QtCore.Qt.CaseSensitivity.CaseInsensitive)
     completer.setFilterMode(QtCore.Qt.MatchFlag.MatchContains)
     completer.setCompletionMode(QtWidgets.QCompleter.CompletionMode.PopupCompletion)
     completer.setMaxVisibleItems(20)
     line.setCompleter(completer)
-
-    # 显示文本 -> 纯代码。选中时按显示文本反查，比按格式切字符串稳妥：
-    # 映射就是建模型时那一份，格式怎么改都不会失配。
-    by_display = {
-        model.index(row, 0).data(): model.index(row, 0).data(SYMBOL_ROLE)
-        for row in range(model.rowCount())
-    }
 
     def write_back(text: str) -> None:
         """把选中项的纯代码写回输入框，覆盖 QCompleter 默认插入的显示文本。

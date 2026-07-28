@@ -58,10 +58,24 @@ def _line(contracts: list[ContractData] | None = None) -> QtWidgets.QLineEdit:
     # 用 is None 而不是 `contracts or CONTRACTS`：空列表是 falsy，会被当成
     # "没传参"回落到全量，而空列表正是要测的那种情况（还没连上网关）。
     rows = CONTRACTS if contracts is None else contracts
-    engine = types.SimpleNamespace(get_all_contracts=lambda: rows)
+    engine = types.SimpleNamespace(get_all_contracts=lambda: list(rows))
     line = QtWidgets.QLineEdit()
     attach_completer(line, engine)                          # type: ignore[arg-type]
     return line
+
+
+def _type(line: QtWidgets.QLineEdit, text: str) -> list[str]:
+    """模拟用户敲字并返回弹窗内容。
+
+    QLineEdit 被编辑时发的正是 textEdited —— 补全表按需刷新就挂在它上面，
+    所以测试必须走这条路，直接 setCompletionPrefix 会跳过刷新、测不出陈旧。
+    """
+    line.setText(text)
+    line.textEdited.emit(text)
+    completer = line.completer()
+    completer.setCompletionPrefix(text)
+    model = completer.completionModel()
+    return [model.index(row, 0).data() for row in range(model.rowCount())]
 
 
 def _matches(line: QtWidgets.QLineEdit, typed: str) -> list[str]:
@@ -146,3 +160,51 @@ def test_no_contracts_yields_an_empty_but_working_field(
     assert line.completer().model().rowCount() == 0
     line.setText("IF88.CFFEX")
     assert line.text() == "IF88.CFFEX"
+
+
+# ── 合约是异步到的，不能开机快照一次 ─────────────────────────────────
+
+def test_contracts_arriving_after_the_panel_is_built(qapp: QtWidgets.QApplication) -> None:
+    """用户报的那一个：面板建好时合约还没查回来，之后一直搜不到。
+
+    实测启动日志：补丁装好与面板建成同在 10:07:33，四个市场的合约到
+    10:07:34~35 才陆续查完。而回测面板整个进程只建一次 —— 开机快照下来的
+    空表再也不会更新，表现就是"打字没有任何反应"。
+    """
+    pool: list[ContractData] = []
+    line = _line(pool)
+
+    assert _type(line, "NBIS") == [], "合约还没到，本来就该搜不到"
+
+    pool.append(_contract("NBIS", "NEBIUS GROUP", Exchange.SMART))
+    assert _type(line, "NBIS") == ["NBIS.SMART NEBIUS GROUP"]
+
+
+def test_a_gateway_connected_later_also_shows_up(qapp: QtWidgets.QApplication) -> None:
+    """后连的网关同样要能搜到 —— 按需刷新顺带把这件事也办了。"""
+    pool = [_contract("NBIS", "NEBIUS GROUP", Exchange.SMART)]
+    line = _line(pool)
+    _type(line, "NBIS")
+
+    pool.append(_contract("9988", "阿里巴巴", Exchange.SEHK))
+    assert _type(line, "阿里") == ["9988.SEHK 阿里巴巴"]
+
+
+def test_rebuild_only_happens_when_the_count_changes(qapp: QtWidgets.QApplication) -> None:
+    """敲一串字符不该反复重建两万多行。"""
+    calls = {"n": 0}
+
+    def counted() -> list[ContractData]:
+        calls["n"] += 1
+        return CONTRACTS
+
+    engine = types.SimpleNamespace(get_all_contracts=counted)
+    line = QtWidgets.QLineEdit()
+    attach_completer(line, engine)                          # type: ignore[arg-type]
+    before = line.completer().model().rowCount()
+
+    for text in ("N", "NB", "NBI", "NBIS"):
+        line.setText(text)
+        line.textEdited.emit(text)
+
+    assert line.completer().model().rowCount() == before, "数量没变却重建了模型"
