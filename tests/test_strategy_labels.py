@@ -95,5 +95,50 @@ def test_test_strategy_is_marked_as_non_trading(qapp) -> None:
     assert "不交易" in c.itemText(0) or "不交易" in c.itemData(0, 3)
 
 
+# ── 钩子挂在哪：必须是"下拉框已经有内容"之后 ─────────────────────────
+
+def test_relabel_on_an_empty_combo_changes_nothing(qapp) -> None:
+    """这条钉住第一版的失效原因。
+
+    第一版把钩子挂在 BacktesterManager.init_ui 上，而 class_combo 不是在那里
+    填的 —— __init__ 的顺序是 init_ui()(建控件) -> init_strategy_settings()
+    (addItems) -> load_backtesting_setting()(选中)。挂在 init_ui 就是对着空
+    下拉改标，界面上一条中文也不会出现。
+    """
+    assert _relabel(QtWidgets.QComboBox()) == 0
+
+
+def test_hooks_cover_every_upstream_reader(qapp) -> None:
+    """改了显示文本就得改每一个读取方，漏一处那条路就拿着中文去找策略类。
+
+    上游读 class_combo.currentText() 的共四处（widget.py:317/396/514/552）：
+    start_backtesting / start_optimization / edit_strategy_code /
+    reload_strategy_class。这条从模块的钩子清单核对，不是抄一份常量。
+    """
+    from fluent_ui.backtester_strategy_labels import (
+        _POPULATED_AFTER,
+        _READERS,
+        _REPOPULATORS,
+    )
+
+    hooked = set(_READERS) | set(_REPOPULATORS)
+    assert hooked == {
+        "start_backtesting",
+        "start_optimization",
+        "edit_strategy_code",
+        "reload_strategy_class",
+    }
+    # 第一次标注的时机必须是 __init__ 的最后一步，那时下拉才有内容。
+    assert _POPULATED_AFTER == "load_backtesting_setting"
+
+
+def test_show_optimization_result_is_not_hooked(qapp) -> None:
+    """它不读 class_combo（widget.py:465-475 只用 target_display），
+    第一版把它也包了 —— 白包一层，还让人以为它跟策略名有关。"""
+    from fluent_ui.backtester_strategy_labels import _READERS, _REPOPULATORS
+
+    assert "show_optimization_result" not in set(_READERS) | set(_REPOPULATORS)
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

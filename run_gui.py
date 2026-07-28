@@ -62,6 +62,7 @@ from fluent_ui.backtester_gates import install_gate_verdict
 from fluent_ui.backtester_metrics import install_extra_metrics
 from fluent_ui.backtester_segments import install_segment_notice
 from fluent_ui.backtester_strategy_labels import install_strategy_labels
+from fluent_ui.backtester_symbol_search import install_symbol_search
 from fluent_ui.gateway_config import load_all_configs
 
 
@@ -198,9 +199,16 @@ def main() -> None:
         )
 
     # 同样必须在主窗口建成前接 —— 回测面板一旦构造完成，包装就来不及了。
+    # 措辞是"已挂钩"不是"已标中文名"：真正改标要等回测面板建起来、下拉框
+    # 填上内容之后才发生。第一版报的是后者，而当时钩子挂错了位置、一条也没
+    # 改到，日志却照样是成功 —— 回执不能声称还没发生的事。
     labelled = install_strategy_labels()
     if labelled:
-        main_engine.write_log(f"策略下拉框已标中文名: {', '.join(labelled)}")
+        main_engine.write_log(f"策略下拉框中文名已挂钩: {', '.join(labelled)}")
+
+    searchable = install_symbol_search()
+    if searchable:
+        main_engine.write_log(f"回测本地代码已接入合约搜索: {', '.join(searchable)}")
 
     # Router startup audit — PAPER allows PaperAccountApp (loaded above); LIVE
     # skipped it (load_paper=False), so this passes and orders reach the trade
