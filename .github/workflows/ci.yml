@@ -83,7 +83,7 @@ jobs:
       - name: Install package
         run: |
           pip install mypy pytest
-          pip install "-e _deps/vnpy[alpha]"
+          pip install -e "./_deps/vnpy[alpha]"
           pip install -e _deps/vnpy_gatewaykit
           pip install -e _deps/vnpy_ctastrategy
           pip install -e _deps/vnpy_alphakit
