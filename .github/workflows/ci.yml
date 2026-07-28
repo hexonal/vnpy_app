@@ -21,9 +21,9 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
           cache: pip
@@ -43,7 +43,7 @@ jobs:
       # 而 `ruff check .` 是对整个工作目录跑的，提前解出来就会去 lint 兄弟仓。
       - name: Checkout private siblings
         if: env.HAS_TOKEN == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: hexonal/vnpy_gatewaykit
           path: _deps/vnpy_gatewaykit
@@ -55,7 +55,7 @@ jobs:
       # 因为本仓代码真有问题。
       - name: Checkout vnpy fork
         if: env.HAS_TOKEN == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: hexonal/vnpy
           path: _deps/vnpy
@@ -63,7 +63,7 @@ jobs:
 
       - name: Checkout vnpy_ctastrategy
         if: env.HAS_TOKEN == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: hexonal/vnpy_ctastrategy
           path: _deps/vnpy_ctastrategy
@@ -71,7 +71,7 @@ jobs:
 
       - name: Checkout vnpy_alphakit
         if: env.HAS_TOKEN == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: hexonal/vnpy_alphakit
           path: _deps/vnpy_alphakit
@@ -79,7 +79,7 @@ jobs:
 
       - name: Checkout vnpy_futu
         if: env.HAS_TOKEN == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: hexonal/vnpy_futu
           path: _deps/vnpy_futu
@@ -87,7 +87,7 @@ jobs:
 
       - name: Checkout vnpy_usmart
         if: env.HAS_TOKEN == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: hexonal/vnpy_usmart
           path: _deps/vnpy_usmart
