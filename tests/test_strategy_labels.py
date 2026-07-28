@@ -22,8 +22,15 @@ from vnpy.trader.ui import QtWidgets, create_qapp
 from fluent_ui.backtester_strategy_labels import _class_name_of, _relabel
 
 
+# 一个进程只能有一个 QApplication。单跑本文件时没人抢先建，create_qapp() 能过；
+# 但 pytest 跑整个目录时，同目录别的模块在【导入期】就建好了 app，这里再建一次
+# 会抛 "Please destroy the QApplication singleton"。所以先取现成的 —— 这也是
+# test_backtester_segments / _gates / _significance_panel 用的同一个约定。
 @pytest.fixture(scope="module")
-def qapp():
+def qapp() -> QtWidgets.QApplication:
+    existing = QtWidgets.QApplication.instance()
+    if existing is not None:
+        return existing                                     # type: ignore[return-value]
     return create_qapp()
 
 

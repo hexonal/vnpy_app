@@ -520,6 +520,29 @@ class ImportDialog(QtWidgets.QDialog):
             self.file_edit.setText(result[0])
 
 
+def _contract_label(contract: ContractData) -> str:
+    """合约 -> 下拉框里显示的文本。
+
+    原先只放 contract.symbol，于是港股全是裸数字（1 / 2 / 5 / 700 …）——
+    19000 多个合约挤在一个下拉里，看不出 1 是长和还是别的什么，只能靠背。
+    加上名称与交易所才选得动：同一个数字在不同市场是不同的东西。
+    """
+    name = (contract.name or "").strip()
+    return f"{contract.symbol} {name} · {contract.exchange.name}".replace("  ", " ")
+
+
+def _symbol_from_label(text: str) -> str:
+    """显示文本 -> 代码。自由输入(没选下拉项)时原样返回。
+
+    与 _contract_label 成对：改了显示就必须改读取，否则会拿
+    "700 腾讯控股 · SEHK" 整串去当代码下载，直接失败。
+
+    先 strip 再切：手输时前后常带空格（粘贴、误按），不先去掉的话
+    "  AAPL  " 会在第一个空格处切出空串，静默变成"没填代码"。
+    """
+    return text.strip().split(" ", 1)[0]
+
+
 class DownloadDialog(QtWidgets.QDialog):
     def __init__(self, engine: ManagerEngine, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -548,7 +571,7 @@ class DownloadDialog(QtWidgets.QDialog):
         # see download()'s fallback to self.symbol_combo.text() below.
         self.symbol_combo = SearchableComboBox()
         for contract in self.engine.main_engine.get_all_contracts():
-            self.symbol_combo.addItem(contract.symbol, userData=contract)
+            self.symbol_combo.addItem(_contract_label(contract), userData=contract)
         self.symbol_combo.activated.connect(self._on_symbol_selected)
         self.symbol_combo.setPlaceholderText(_("输入代码搜索本地已知合约，或直接输入新代码"))
 
@@ -585,7 +608,7 @@ class DownloadDialog(QtWidgets.QDialog):
             self.exchange_combo.setCurrentIndex(exchange_index)
 
     def download(self) -> None:
-        symbol = self.symbol_combo.text()
+        symbol = self._current_symbol()
         exchange = self.exchange_combo.currentData()
         interval = self.interval_combo.currentData()
 
@@ -609,6 +632,20 @@ class DownloadDialog(QtWidgets.QDialog):
             count = self.engine.download_bar_data(symbol, exchange, interval, start, self.output)
 
         self.output(f"下载结束，总数据量：{count}条")
+
+    def _current_symbol(self) -> str:
+        """当前代码。选了下拉项就用它的 contract.symbol（权威），
+        自由输入则从显示文本里取第一段。
+
+        为什么不直接信文本：用户可能选完再手改几个字，此时 currentData 还
+        指着旧合约。以文本为准、只在文本与该项显示文本一致时才用 userData，
+        两种输入方式都不会错。
+        """
+        text = self.symbol_combo.text().strip()
+        contract: ContractData | None = self.symbol_combo.currentData()
+        if contract is not None and text == _contract_label(contract):
+            return contract.symbol
+        return _symbol_from_label(text)
 
     def output(self, msg: str) -> None:
         box = MessageBox(_("数据下载"), msg, self)
