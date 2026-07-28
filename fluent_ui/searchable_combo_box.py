@@ -120,6 +120,16 @@ class SearchableComboBox(EditableComboBox):
         # over an unchanged ~13k-symbol list doesn't rebuild it each time.
         self.textEdited.connect(self._sync_completer_model)
 
+    def clear(self) -> None:
+        """清空条目，并让补全模型作废。
+
+        必须重写：_sync_completer_model 靠"条目数变了没"决定要不要重建，而整批
+        换掉条目（比如按交易所重新填充代码列表）完全可能换成数量相同的另一批 ——
+        那样补全弹窗会继续提示上一个交易所的合约，看着像还没切换过去。
+        """
+        super().clear()
+        self._completer_item_count = -1
+
     def _sync_completer_model(self, _text: str = "") -> None:
         if len(self.items) == self._completer_item_count:
             return

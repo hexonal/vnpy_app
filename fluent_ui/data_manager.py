@@ -35,6 +35,7 @@ renders as an unthemed native dialog floating over the dark Fluent shell.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import datetime, timedelta
 from functools import partial
 from zoneinfo import available_timezones
@@ -554,32 +555,45 @@ class DownloadDialog(QtWidgets.QDialog):
         # dialog additionally holds a 20-char placeholder in symbol_combo.
         self.setMinimumWidth(420)
 
+        # 重填代码列表期间置位，挡住"填列表 -> 选中项变 -> 反过来又改交易所"的回环。
+        self._reloading = False
+
+        # 本地已知合约按交易所分组。代码列表只放当前交易所的那一组 ——
+        # 混在一起的话，22000 多只合约里只显示得下前 50 条，而这 50 条永远是
+        # 最先查回来的那个市场（这里是港股），选了 SMART 也还是一屏港股代码。
+        self._by_exchange: dict[Exchange, list[ContractData]] = defaultdict(list)
+        # 同一个代码可能在多个市场都存在（港股 1 和别处的 1 毫无关系），
+        # 所以存的是集合而不是单个交易所。
+        self._symbol_homes: dict[str, set[Exchange]] = defaultdict(set)
+        for contract in self.engine.main_engine.get_all_contracts():
+            self._by_exchange[contract.exchange].append(contract)
+            self._symbol_homes[contract.symbol].add(contract.exchange)
+
         self.exchange_combo = SearchableComboBox()
         for i in Exchange:
-            self.exchange_combo.addItem(str(i.name), userData=i)
+            count = len(self._by_exchange.get(i, ()))
+            # 印出合约数，省得靠猜哪个交易所有数据（美股在 vnpy 里叫 SMART，
+            # 不叫 NASDAQ/NYSE —— 光看名字是看不出来的）。
+            label = f"{i.name}（{count}）" if count else str(i.name)
+            self.exchange_combo.addItem(label, userData=i)
 
-        # Populated from every contract the connected gateway(s) already
-        # know about (main_engine.get_all_contracts() — thousands of
-        # entries once FutuGateway has queried SEHK/SZSE/SSE/SMART, see
-        # run_gui.py), so a real, exchange-verified symbol can be found by
-        # typing part of it instead of guessing at the exact code blind.
-        # Still a SearchableComboBox (not a locked-down enum-backed one
-        # like exchange/interval above): downloading history for a symbol
-        # not yet in main_engine's contract cache is a legitimate use case
-        # (e.g. right after a fresh connect, before a full contract query
-        # has finished), so free-text entry via Enter must keep working —
-        # see download()'s fallback to self.symbol_combo.text() below.
+        # 起始交易所选合约最多的那个，而不是枚举第一项（CFFEX，本地一只合约都没有,
+        # 代码列表会是空的，看着像坏了）。
+        if self._by_exchange:
+            busiest = max(self._by_exchange, key=lambda ex: len(self._by_exchange[ex]))
+            self.exchange_combo.setCurrentIndex(list(Exchange).index(busiest))
+
+        # 仍然用 SearchableComboBox 而非锁死的枚举下拉：下载一个本地合约缓存里
+        # 还没有的代码是正当用法（比如刚连上、合约还没查完），所以手输必须能用 ——
+        # 见下面 download() 走 _current_symbol() 的自由输入分支。
+        # 不再反过来"选合约就改交易所"：代码列表已按交易所过滤，列表里的合约
+        # 本来就属于当前交易所，那条联动永远是空操作。代码与交易所对不上的情形
+        # 改由 _wrong_exchange_hint 在下载时直说。
         self.symbol_combo = SearchableComboBox()
-        for contract in self.engine.main_engine.get_all_contracts():
-            self.symbol_combo.addItem(_contract_label(contract), userData=contract)
-        # currentIndexChanged 而非 activated：activated 只由 _onItemClicked 发出
-        # （qfluentwidgets combo_box.py:366），也就是只在"点开箭头、点菜单里的条目"
-        # 这一条路上。而实际最常走的是打字时弹出的补全popup —— 它走
-        # __onActivated -> setCurrentIndex，不发 activated，交易所于是不跟随：
-        # 选了港股合约，交易所还停在 CFFEX，下载下来的东西对不上。
-        # currentIndexChanged 三条路（菜单点击/补全popup/手输回车）都会发。
-        self.symbol_combo.currentIndexChanged.connect(self._on_symbol_selected)
         self.symbol_combo.setPlaceholderText(_("输入代码搜索本地已知合约，或直接输入新代码"))
+
+        self.exchange_combo.currentIndexChanged.connect(self._on_exchange_changed)
+        self._reload_symbols()
 
         self.interval_combo = SearchableComboBox()
         for interval in Interval:
@@ -601,21 +615,41 @@ class DownloadDialog(QtWidgets.QDialog):
         form.addRow(button)
         self.setLayout(form)
 
-    def _on_symbol_selected(self, index: int) -> None:
-        """选中一个已知合约时，交易所自动跟到它真正所属的那个。
+    def _reload_symbols(self) -> None:
+        """把代码列表换成当前交易所的合约。"""
+        exchange = self.exchange_combo.currentData()
+        self._reloading = True
+        try:
+            self.symbol_combo.clear()
+            for contract in self._by_exchange.get(exchange, ()):
+                self.symbol_combo.addItem(_contract_label(contract), userData=contract)
+        finally:
+            self._reloading = False
 
-        用户刚刚搜出了正确的合约，没有理由再让他自己去想它在哪个交易所挂牌 ——
-        而且交易所选错不会报错，只会安静地下载到不存在的数据。
+    def _on_exchange_changed(self, _index: int) -> None:
+        """换交易所就换掉代码列表。
 
-        index 可能是 -1（文本不匹配任何条目，比如正在打字或手输新代码），
-        itemData 对越界返回 None（combo_box.py:200-205），下面按 None 早退。
+        上一个交易所的代码留在框里没有意义 —— 拿它配新交易所去下载，查不到合约,
+        只会得到一句指向数据服务的报错，看不出真正的原因是两栏对不上。
         """
-        contract: ContractData | None = self.symbol_combo.itemData(index)
-        if contract is None:
+        if self._reloading:
             return
-        exchange_index = self.exchange_combo.findText(contract.exchange.name)
-        if exchange_index >= 0:
-            self.exchange_combo.setCurrentIndex(exchange_index)
+        self._reload_symbols()
+
+    def _wrong_exchange_hint(self, symbol: str, exchange: Exchange) -> str:
+        """代码与交易所对不上时的提示；对得上或无从判断则返回空串。
+
+        没有这一句的话，报错来自下载链路的更下游：download_bar_data 用
+        "代码.交易所" 查不到合约就退到 datafeed（engine.py:203-213），于是弹出
+        "没有配置要使用的数据服务" —— 指向的是数据服务，而真正的原因是这两栏
+        不匹配。本地明确知道它挂在哪个市场时，就直接说出来。
+        """
+        homes = self._symbol_homes.get(symbol)
+        if not homes or exchange in homes:
+            return ""                       # 对得上，或本地压根不认识这个代码
+        return _("代码 {} 不在 {}，它在 {}").format(
+            symbol, exchange.name, "/".join(ex.name for ex in sorted(homes, key=lambda e: e.name))
+        )
 
     def download(self) -> None:
         symbol = self._current_symbol()
@@ -630,6 +664,11 @@ class DownloadDialog(QtWidgets.QDialog):
             # filtered dropdown. Fail with a clear message instead of a
             # raw AttributeError/None-related crash.
             self.output(_("请从下拉列表中选择交易所和周期，不要只输入部分文字后回车"))
+            return
+
+        mismatch = self._wrong_exchange_hint(symbol, exchange)
+        if mismatch:
+            self.output(mismatch)
             return
 
         start_date = self.start_date_edit.getDate()
