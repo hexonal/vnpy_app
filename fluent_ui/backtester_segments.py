@@ -185,6 +185,13 @@ def _attach_notice(widget: Any) -> None:
     label.setObjectName(NOTICE_OBJECT_NAME)
     label.setToolTip(notice_tooltip(record))
     label.setWordWrap(True)
+    # 光开 setWordWrap 不够：QFormLayout 默认不会为换行后的内容多留高度，
+    # 于是能不能显示全取决于字体宽窄 —— macOS 上 48px 够用，CI 的 Linux
+    # runner 字体更宽，同一段文字需要 57px，提示被截断（实测断言失败）。
+    # 打开 height-for-width，布局才会去问 heightForWidth() 并按结果分配。
+    policy = label.sizePolicy()
+    policy.setHeightForWidth(True)
+    label.setSizePolicy(policy)
     # 命令是给人抄去终端跑的 —— 不能选中就等于没印。
     label.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
     form.addRow(label)
