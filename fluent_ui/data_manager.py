@@ -572,7 +572,13 @@ class DownloadDialog(QtWidgets.QDialog):
         self.symbol_combo = SearchableComboBox()
         for contract in self.engine.main_engine.get_all_contracts():
             self.symbol_combo.addItem(_contract_label(contract), userData=contract)
-        self.symbol_combo.activated.connect(self._on_symbol_selected)
+        # currentIndexChanged 而非 activated：activated 只由 _onItemClicked 发出
+        # （qfluentwidgets combo_box.py:366），也就是只在"点开箭头、点菜单里的条目"
+        # 这一条路上。而实际最常走的是打字时弹出的补全popup —— 它走
+        # __onActivated -> setCurrentIndex，不发 activated，交易所于是不跟随：
+        # 选了港股合约，交易所还停在 CFFEX，下载下来的东西对不上。
+        # currentIndexChanged 三条路（菜单点击/补全popup/手输回车）都会发。
+        self.symbol_combo.currentIndexChanged.connect(self._on_symbol_selected)
         self.symbol_combo.setPlaceholderText(_("输入代码搜索本地已知合约，或直接输入新代码"))
 
         self.interval_combo = SearchableComboBox()
@@ -596,10 +602,14 @@ class DownloadDialog(QtWidgets.QDialog):
         self.setLayout(form)
 
     def _on_symbol_selected(self, index: int) -> None:
-        """Picking a known contract from symbol_combo's dropdown also
-        selects its real exchange in exchange_combo — the user just found
-        the right vt_symbol by searching, no reason to make them separately
-        look up and re-select which exchange it trades on."""
+        """选中一个已知合约时，交易所自动跟到它真正所属的那个。
+
+        用户刚刚搜出了正确的合约，没有理由再让他自己去想它在哪个交易所挂牌 ——
+        而且交易所选错不会报错，只会安静地下载到不存在的数据。
+
+        index 可能是 -1（文本不匹配任何条目，比如正在打字或手输新代码），
+        itemData 对越界返回 None（combo_box.py:200-205），下面按 None 早退。
+        """
         contract: ContractData | None = self.symbol_combo.itemData(index)
         if contract is None:
             return

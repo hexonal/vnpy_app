@@ -46,8 +46,9 @@ class SearchableComboBox(EditableComboBox):
     """
     EditableComboBox with the type-to-filter behavior its name implies but
     doesn't actually provide (see module docstring). Overrides
-    _showComboMenu() to only list items whose text contains the currently
-    typed text (case-insensitive substring match) — the dropdown-button
+    _showComboMenu() to only list items whose text contains what the user
+    has typed so far (case-insensitive substring match; see _query() for how
+    "typed so far" is told apart from "already selected") — the dropdown-button
     click path is the only thing qfluentwidgets builds a menu from, so this
     single override covers both "click the arrow" and the equivalent
     internal call path; typing still falls through to EditableComboBox's
@@ -125,8 +126,29 @@ class SearchableComboBox(EditableComboBox):
         self._completer_item_count = len(self.items)
         self._completer_model.setStringList([item.text for item in self.items])
 
+    def _query(self) -> str:
+        """当前应当用来过滤下拉的搜索词；没有则返回空串。
+
+        关键区分：框里的文本可能是【已选中的值】，也可能是【用户正在敲的搜索词】。
+        早先这里直接拿 self.text() 当搜索词，于是选中之后再点箭头，就用选中项自己
+        去过滤自己 —— 列表塌缩成只剩当前这一项。对交易所/周期这种枚举下拉，等于
+        选定之后再也换不掉：用户选了港股合约、交易所自动跟成 SEHK，再点开就只剩
+        SEHK，美国的全不见了（用户实测报障，49 个交易所只列出 1 个）。
+
+        判据用上游自己维护的 _currentIndex：EditableComboBox._onComboTextChanged
+        在每次文本变化后重扫 items，文本与某项完全相等时把 _currentIndex 置为该项，
+        否则置 -1（combo_box.py:527-537）。所以 _currentIndex >= 0 ⟺ 当前文本是一个
+        已落定的选项 ⟹ 它不是搜索词。实测：选中 SEHK -> 31；敲入 'SM' -> -1；
+        敲全 'SMART' -> 15；清空 -> -1。
+        """
+        if self._currentIndex >= 0:
+            return ""
+        # str() 而非 cast()：qfluentwidgets 无类型标注，text() 推断为 Any。
+        # cast 在装了 PySide6 存根的环境里会被判成冗余，两边都成立的写法只有 str()。
+        return str(self.text()).strip().lower()
+
     def _showComboMenu(self) -> None:
-        query = self.text().strip().lower()
+        query = self._query()
         all_items = self.items
         all_index = self._currentIndex
         if query:
