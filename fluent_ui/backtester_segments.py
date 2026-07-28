@@ -70,7 +70,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, cast
 
-from vnpy.trader.ui import QtCore, QtWidgets
+from vnpy.trader.ui import QtCore, QtGui, QtWidgets
 
 if TYPE_CHECKING:
     from vnpy_ctastrategy.segment_record import SplitRecord
@@ -170,6 +170,26 @@ def refresh_notice(widget: Any) -> SplitRecord | None:
     return record
 
 
+class _WrappingNotice(QtWidgets.QLabel):
+    """换行标签：随宽度重算最小高度，不许被布局压扁。
+
+    只设 setWordWrap(True) 不够。换行标签的 minimumSizeHint 很小，所以当表单
+    里的行争抢高度时，布局可以把它压到低于换行后所需的高度，文字就被裁掉 ——
+    而"够不够"取决于字体多宽：macOS 的字体窄，两行 48px 正好塞下；CI 的 Linux
+    runner 字体更宽，同一段话要三行 57px，于是截断（实测断言 57 <= 48 失败）。
+
+    setSizePolicy(heightForWidth=True) 治不了这个：QFormLayout 在空间不足时
+    仍会压。真正管用的是每次宽度变化后把 minimumHeight 钉到 heightForWidth()
+    —— 布局不能低于 minimumHeight，于是无论字体、语言、DPI 怎么变都不会裁字。
+    （隔离验证：12 行表单挤 300px 高时，普通 QLabel 拿到 23px 而需要 49px；
+    本类拿到 49px。）
+    """
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self.setMinimumHeight(self.heightForWidth(self.width()))
+
+
 def _attach_notice(widget: Any) -> None:
     """在参数区表单末尾加一行提示（跨两列）。
 
@@ -181,17 +201,10 @@ def _attach_notice(widget: Any) -> None:
         return
 
     record = load_current_record()
-    label = QtWidgets.QLabel(notice_text())
+    label = _WrappingNotice(notice_text())
     label.setObjectName(NOTICE_OBJECT_NAME)
     label.setToolTip(notice_tooltip(record))
     label.setWordWrap(True)
-    # 光开 setWordWrap 不够：QFormLayout 默认不会为换行后的内容多留高度，
-    # 于是能不能显示全取决于字体宽窄 —— macOS 上 48px 够用，CI 的 Linux
-    # runner 字体更宽，同一段文字需要 57px，提示被截断（实测断言失败）。
-    # 打开 height-for-width，布局才会去问 heightForWidth() 并按结果分配。
-    policy = label.sizePolicy()
-    policy.setHeightForWidth(True)
-    label.setSizePolicy(policy)
     # 命令是给人抄去终端跑的 —— 不能选中就等于没印。
     label.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
     form.addRow(label)
