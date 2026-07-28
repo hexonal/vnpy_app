@@ -51,6 +51,7 @@ from qfluentwidgets import (
 from vnpy.event import EventEngine
 from vnpy.trader.constant import Exchange, Interval
 from vnpy.trader.database import DB_TZ
+from vnpy.trader.datafeed import BaseDatafeed
 from vnpy.trader.engine import MainEngine
 from vnpy.trader.locale import _
 from vnpy.trader.object import BarData, ContractData
@@ -651,6 +652,33 @@ class DownloadDialog(QtWidgets.QDialog):
             symbol, exchange.name, "/".join(ex.name for ex in sorted(homes, key=lambda e: e.name))
         )
 
+    def _unavailable_reason(self, symbol: str, exchange: Exchange, interval: Interval) -> str:
+        """这一组条件根本取不到数据时的说明；能取则返回空串。
+
+        下载有两条来源，规则藏在 vnpy_datamanager/engine.py 里：K 线优先问网关
+        （合约 history_data=True 时，engine.py:207-210），**Tick 永远只问数据服务**
+        （engine.py:238，压根不看网关）。所以没配数据服务时选 TICK 必然失败，
+        而失败信息是数据服务给的那句"没有正确配置数据服务" —— 它没说清楚
+        "这台机器上 Tick 本来就没有来源"，用户会以为是配置漏了一步。
+        """
+        # 比的是"恰好是基类本身"而不是 isinstance：未配置时 get_datafeed 返回的
+        # 就是这个只会打印一句话的 BaseDatafeed 桩（datafeed.py:49-51），
+        # 配好了则是它的子类。isinstance 对子类恒真，区分不出这两种情况。
+        if type(self.engine.datafeed) is not BaseDatafeed:
+            return ""                       # 配了真数据服务，两条路都可能通
+
+        if interval is Interval.TICK:
+            return _("未配置数据服务，取不到 Tick 历史 —— Tick 只能来自数据服务，"
+                     "网关不提供。请改选 K 线周期（分钟/小时/日/周），"
+                     "或在全局配置里设置 datafeed。")
+
+        contract = self.engine.main_engine.get_contract(f"{symbol}.{exchange.value}")
+        if contract is None or not contract.history_data:
+            return _("未配置数据服务，且本地网关不提供 {}.{} 的历史 K 线。").format(
+                symbol, exchange.value
+            )
+        return ""
+
     def download(self) -> None:
         symbol = self._current_symbol()
         exchange = self.exchange_combo.currentData()
@@ -669,6 +697,11 @@ class DownloadDialog(QtWidgets.QDialog):
         mismatch = self._wrong_exchange_hint(symbol, exchange)
         if mismatch:
             self.output(mismatch)
+            return
+
+        unavailable = self._unavailable_reason(symbol, exchange, interval)
+        if unavailable:
+            self.output(unavailable)
             return
 
         start_date = self.start_date_edit.getDate()

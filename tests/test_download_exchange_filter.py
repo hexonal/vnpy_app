@@ -23,7 +23,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from vnpy.trader.constant import Exchange, Product
+from vnpy.trader.constant import Exchange, Interval, Product
 from vnpy.trader.object import ContractData
 from vnpy.trader.ui import QtWidgets, create_qapp
 
@@ -166,3 +166,64 @@ def test_same_code_in_two_markets_lists_both(qapp: QtWidgets.QApplication) -> No
     dialog = _dialog(contracts)
     hint = dialog._wrong_exchange_hint("1", Exchange.SMART)
     assert "SEHK" in hint and "SSE" in hint
+
+
+# ── 取不到数据时，说清楚为什么 ────────────────────────────────────────
+
+def _dialog_with_datafeed(contracts: list[ContractData], datafeed: object) -> DownloadDialog:
+    engine = types.SimpleNamespace(
+        main_engine=types.SimpleNamespace(
+            get_all_contracts=lambda: contracts,
+            get_contract=lambda vt: next(
+                (c for c in contracts if f"{c.symbol}.{c.exchange.value}" == vt), None
+            ),
+        ),
+        datafeed=datafeed,
+    )
+    return DownloadDialog(engine)                           # type: ignore[arg-type]
+
+
+def test_tick_without_datafeed_says_tick_has_no_source(qapp: QtWidgets.QApplication) -> None:
+    """用户实际撞上的那一个。
+
+    原来的报错是数据服务给的"没有正确配置数据服务" —— 听着像少配了一步，
+    其实是 Tick 在这台机器上本来就没有来源：download_tick_data 只问数据服务、
+    从不问网关（vnpy_datamanager/engine.py:238），而网关只提供 K 线。
+    """
+    from vnpy.trader.datafeed import BaseDatafeed
+
+    dialog = _dialog_with_datafeed(_sample(), BaseDatafeed())
+    reason = dialog._unavailable_reason("US7", Exchange.SMART, Interval.TICK)
+    assert "Tick" in reason
+    assert "K 线" in reason, "只说不行不够，得指出改选什么"
+
+
+def test_bars_from_the_gateway_need_no_datafeed(qapp: QtWidgets.QApplication) -> None:
+    """网关能给 K 线时不该拦 —— 这正是当前唯一走得通的路。"""
+    from vnpy.trader.datafeed import BaseDatafeed
+
+    contracts = _sample()
+    for contract in contracts:
+        contract.history_data = True
+
+    dialog = _dialog_with_datafeed(contracts, BaseDatafeed())
+    assert dialog._unavailable_reason("US7", Exchange.SMART, Interval.MINUTE) == ""
+
+
+def test_bars_without_gateway_history_are_reported(qapp: QtWidgets.QApplication) -> None:
+    from vnpy.trader.datafeed import BaseDatafeed
+
+    dialog = _dialog_with_datafeed(_sample(), BaseDatafeed())   # history_data 默认 False
+    reason = dialog._unavailable_reason("US7", Exchange.SMART, Interval.MINUTE)
+    assert "US7" in reason and "SMART" in reason
+
+
+def test_a_configured_datafeed_is_never_blocked(qapp: QtWidgets.QApplication) -> None:
+    """配了真数据服务就一律放行 —— 能不能取到由它自己说了算，我们不越权预判。"""
+    from vnpy.trader.datafeed import BaseDatafeed
+
+    class RealFeed(BaseDatafeed):
+        pass
+
+    dialog = _dialog_with_datafeed(_sample(), RealFeed())
+    assert dialog._unavailable_reason("US7", Exchange.SMART, Interval.TICK) == ""
