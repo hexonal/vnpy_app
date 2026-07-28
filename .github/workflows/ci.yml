@@ -25,6 +25,12 @@ jobs:
           python-version: "3.13"
           cache: pip
 
+      # PySide6 的 .so 在链接期就要 libEGL / libGL，即使跑 offscreen 平台也一样
+      # （offscreen 只是不建窗口，不是不加载图形库）。ubuntu runner 默认没装，
+      # 症状是 import 阶段 ImportError: libEGL.so.1: cannot open shared object file。
+      - name: Install system libs for PySide6
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libegl1 libgl1
+
       - name: Install lint tools
         run: |
           python -m pip install --upgrade pip
