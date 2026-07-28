@@ -134,7 +134,13 @@ jobs:
       # 单条 120s 足够宽（最慢的 offscreen 子进程用例自带 timeout=120），
       # 超时会打印那一条的名字与栈，把「卡住」变成可定位的失败。
       - name: Test
+        # timeout-minutes 是兜底：pytest-timeout 只能打断**用例函数体**里的卡住，
+        # 对收集阶段、fixture 拆解、以及「用例都跑完但进程不退出」(残留非 daemon
+        # 线程 / Qt 事件循环没停) 一律无效 —— 上一轮 9 分钟仍在跑就证明卡点不在
+        # 函数体内。步骤级超时会把 job 杀掉并让日志可读，把「永远挂着」变成
+        # 「10 分钟后失败且看得到停在哪」。
+        timeout-minutes: 10
         env:
           QT_QPA_PLATFORM: offscreen
-        run: pytest tests -q --timeout=120 --timeout-method=thread
+        run: pytest tests -q --timeout=60 --timeout-method=thread -v
 
