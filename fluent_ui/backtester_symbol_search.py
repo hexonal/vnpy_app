@@ -104,22 +104,28 @@ def attach_completer(line: QtWidgets.QLineEdit, main_engine: MainEngine) -> int:
     completer.setMaxVisibleItems(20)
     line.setCompleter(completer)
 
-    def write_back(text: str) -> None:
-        """把选中项的纯代码写回输入框，覆盖 QCompleter 默认插入的显示文本。
+    def normalize(text: str) -> None:
+        """框里一出现某个显示文本，就换成对应的纯代码。
 
-        默认插入的是 `NBIS.SMART NEBIUS GROUP`，那不是合法本地代码 ——
-        上游拿它去查合约必然落空。QCompleter 自己那条连接建立在 setCompleter
-        里，早于这条，所以这里跑在它之后，覆盖成立。
+        选中补全项后，QCompleter 插进来的是显示文本 `NBIS.SMART NEBIUS GROUP`，
+        那不是合法本地代码 —— 上游拿它查合约必然落空，而报错只会说交易所后缀
+        不对，看不出根因在补全上。
 
-        接的是 activated 的 str 重载（不带参数的 connect 默认就绑它，实测确认），
-        而不是 `activated[QModelIndex]` —— 后者运行时可用，但 PySide6 的存根
-        没标这个重载索引，只能靠 Any 绕过类型检查，那等于把类型闸关掉。
+        为什么不接 `activated` 去覆盖：试过，赢不了。实测一次真实的"弹窗里按
+        回车"会触发三次 textChanged —— Qt 先写一次显示文本，我们的槽写一次纯
+        代码，Qt **在我们之后又写了一次**显示文本。连接顺序不是这里的决定因素。
+
+        改成盯 textChanged 做归一，就与"谁最后写"无关了：不管这段文本是补全
+        插入的、粘贴的还是手打的，只要它恰好等于某个显示文本，就换成纯代码。
+
+        不会递归：换上去的纯代码不带名称，在 by_display 里查不到（键都形如
+        `代码 名称`）。名称为空的合约显示文本本就等于纯代码，被 `!=` 挡掉。
         """
         symbol = by_display.get(text)
-        if symbol:
-            line.setText(str(symbol))
+        if symbol and symbol != text:
+            line.setText(symbol)
 
-    completer.activated.connect(write_back)
+    line.textChanged.connect(normalize)
 
     # 留住引用：QCompleter 的父对象是 line，但模型只被 completer 引用，
     # 在某些绑定下会被提前回收，弹窗随后空白。

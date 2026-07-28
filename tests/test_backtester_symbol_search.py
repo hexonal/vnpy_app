@@ -21,7 +21,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from vnpy.trader.constant import Exchange, Product
 from vnpy.trader.object import ContractData
-from vnpy.trader.ui import QtWidgets, create_qapp
+from vnpy.trader.ui import QtCore, QtWidgets, create_qapp
 
 from fluent_ui.backtester_symbol_search import SYMBOL_ROLE, attach_completer
 
@@ -111,20 +111,62 @@ def test_matching_is_substring_not_prefix(qapp: QtWidgets.QApplication) -> None:
 
 # ── 填进去的是纯代码 ────────────────────────────────────────────────
 
+def _pick_from_popup(line: QtWidgets.QLineEdit, typed: str) -> str:
+    """走真实的选中路径：打字 -> 弹窗 -> ↓ -> 回车，返回输入框最终内容。
+
+    必须走真路径。上一版只手工 `completer.activated.emit(...)`，那条路能过，
+    但真实选中会触发三次 textChanged —— Qt 先写显示文本、我们的槽写纯代码、
+    Qt 在我们之后**又写一次**显示文本。手工 emit 看不到最后那一次，于是测试
+    通过而界面上留下的仍是带名称的整串。
+    """
+    from PySide6.QtTest import QTest
+
+    def pump() -> None:
+        # 弹窗的显示与按键投递都要过事件循环；少了它按键会落空，
+        # 表现成"文本停在刚敲进去的那几个字符"。
+        QtWidgets.QApplication.processEvents()
+
+    line.show()
+    line.setFocus()
+    pump()
+    line.setText(typed)
+    line.textEdited.emit(typed)
+
+    completer = line.completer()
+    completer.setCompletionPrefix(typed)
+    completer.complete()
+    pump()
+    QTest.keyClick(completer.popup(), QtCore.Qt.Key.Key_Down)
+    pump()
+    QTest.keyClick(completer.popup(), QtCore.Qt.Key.Key_Return)
+    pump()
+    return line.text()
+
+
 def test_picking_writes_back_the_bare_symbol(qapp: QtWidgets.QApplication) -> None:
     """核心配对：弹窗显示带名称，输入框里只能留合法本地代码。
 
-    若少了这一步，输入框会变成 "700.SEHK 腾讯控股"，上游拿它查合约必然落空，
-    而报错只会说"找不到数据"，看不出根因在补全上。
+    若少了这一步，输入框会变成 "700.SEHK 腾讯控股" —— 上游拿它查合约必然落空，
+    而报错只说"交易所后缀不正确"，看不出根因在补全上（用户实测撞到过）。
     """
+    assert _pick_from_popup(_line(), "700") == "700.SEHK"
+
+
+def test_picking_an_english_named_contract(qapp: QtWidgets.QApplication) -> None:
+    assert _pick_from_popup(_line(), "NBIS") == "NBIS.SMART"
+
+
+def test_nameless_contract_survives_normalisation(qapp: QtWidgets.QApplication) -> None:
+    """名称为空时显示文本本就等于纯代码，归一必须原样放过、不能空转。"""
+    line = _line([_contract("1", "", Exchange.SEHK)])
+    assert _pick_from_popup(line, "1.SEHK") == "1.SEHK"
+
+
+def test_pasting_a_display_string_is_normalised(qapp: QtWidgets.QApplication) -> None:
+    """归一盯的是文本内容而非某条信号，所以粘贴进来的整串同样会被换掉。"""
     line = _line()
-    completer = line.completer()
-    completer.setCompletionPrefix("腾讯")
-    shown = completer.completionModel().index(0, 0).data()
-
-    completer.activated.emit(shown)                         # 模拟点选弹窗里那一行
-
-    assert line.text() == "700.SEHK"
+    line.setText("NBIS.SMART NEBIUS GROUP")
+    assert line.text() == "NBIS.SMART"
 
 
 def test_every_row_carries_a_bare_symbol(qapp: QtWidgets.QApplication) -> None:
