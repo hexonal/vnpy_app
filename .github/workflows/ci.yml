@@ -96,7 +96,9 @@ jobs:
       # fluent_ui / strategies / data_tools。
       - name: Install package
         run: |
-          pip install mypy pytest pytest-timeout
+          # vnpy_sqlite：vnpy 的默认数据库驱动，get_database() 运行时按名加载，
+          # 不在任何 install_requires 里，但回测面板一初始化就要它。
+          pip install mypy pytest pytest-timeout vnpy_sqlite
           pip install -e "./_deps/vnpy[alpha]"
           pip install -e _deps/vnpy_gatewaykit
           pip install -e _deps/vnpy_ctastrategy
