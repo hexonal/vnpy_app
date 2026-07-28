@@ -58,6 +58,7 @@ from vnpy_riskmanager import RiskManagerApp
 from vnpy_usmart import UsmartGateway
 
 from fluent_ui import FluentMainWindow, create_fluent_qapp
+from fluent_ui.backtester_data_check import install_data_check
 from fluent_ui.backtester_gates import install_gate_verdict
 from fluent_ui.backtester_metrics import install_extra_metrics
 from fluent_ui.backtester_segments import install_segment_notice
@@ -209,6 +210,10 @@ def main() -> None:
     searchable = install_symbol_search()
     if searchable:
         main_engine.write_log(f"回测本地代码已接入合约搜索: {', '.join(searchable)}")
+
+    data_checked = install_data_check()
+    if data_checked:
+        main_engine.write_log(f"回测数据自检已挂钩: {', '.join(data_checked)}")
 
     # Router startup audit — PAPER allows PaperAccountApp (loaded above); LIVE
     # skipped it (load_paper=False), so this passes and orders reach the trade
