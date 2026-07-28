@@ -61,6 +61,7 @@ from fluent_ui import FluentMainWindow, create_fluent_qapp
 from fluent_ui.backtester_gates import install_gate_verdict
 from fluent_ui.backtester_metrics import install_extra_metrics
 from fluent_ui.backtester_segments import install_segment_notice
+from fluent_ui.backtester_strategy_labels import install_strategy_labels
 from fluent_ui.gateway_config import load_all_configs
 
 
@@ -195,6 +196,11 @@ def main() -> None:
         main_engine.write_log(
             f"回测面板已接入三段闸: {', '.join(installed_segment_hooks)}"
         )
+
+    # 同样必须在主窗口建成前接 —— 回测面板一旦构造完成，包装就来不及了。
+    labelled = install_strategy_labels()
+    if labelled:
+        main_engine.write_log(f"策略下拉框已标中文名: {', '.join(labelled)}")
 
     # Router startup audit — PAPER allows PaperAccountApp (loaded above); LIVE
     # skipped it (load_paper=False), so this passes and orders reach the trade
