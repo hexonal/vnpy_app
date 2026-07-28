@@ -96,7 +96,7 @@ jobs:
       # fluent_ui / strategies / data_tools。
       - name: Install package
         run: |
-          pip install mypy pytest
+          pip install mypy pytest pytest-timeout
           pip install -e "./_deps/vnpy[alpha]"
           pip install -e _deps/vnpy_gatewaykit
           pip install -e _deps/vnpy_ctastrategy
@@ -129,8 +129,12 @@ jobs:
       # （tests/*.py 顶部自己 setdefault 了同一个变量，见
       # tests/test_fluent_offscreen_guard.py 与 README「无显示环境下不能用
       # FluentMainWindow」一节）。
+      # --timeout：本仓的 Qt 用例在 runner 上曾把 Test 步骤挂到 31 分钟
+      # （本地只要 70 秒），而没有超时的 job 会一直烧时间且看不出卡在哪一条。
+      # 单条 120s 足够宽（最慢的 offscreen 子进程用例自带 timeout=120），
+      # 超时会打印那一条的名字与栈，把「卡住」变成可定位的失败。
       - name: Test
         env:
           QT_QPA_PLATFORM: offscreen
-        run: pytest tests -q
+        run: pytest tests -q --timeout=120 --timeout-method=thread
 
