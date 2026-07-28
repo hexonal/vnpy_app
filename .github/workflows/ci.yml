@@ -13,9 +13,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  # 私有兄弟包要 token 才装得到。没有 token 时只跑 lint —— 那一步不需要装依赖。
-  HAS_TOKEN: ${{ secrets.VNPY_CI_TOKEN != '' }}
 
 jobs:
   check:
@@ -33,7 +30,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install ruff
 
-      # lint 不需要装任何依赖，所以永远跑得了 —— 没有 token 时它就是全部保障。
+      # lint 排在装依赖之前：它不需要任何依赖，装依赖失败时仍能给出信号。
       # 规则集与目标版本都钉在本仓 pyproject.toml 的 [tool.ruff] 里，不靠这里的
       # 命令行参数，也不会沿目录树往上读到别的仓的配置。
       - name: Lint
@@ -41,64 +38,49 @@ jobs:
 
       # 这些 checkout 必须排在 Lint 之后：它们把别的仓解到 _deps/ 里，
       # 而 `ruff check .` 是对整个工作目录跑的，提前解出来就会去 lint 兄弟仓。
-      - name: Checkout private siblings
-        if: env.HAS_TOKEN == 'true'
+      # 兄弟仓已全部公开，checkout 用 runner 自带的 GITHUB_TOKEN 即可，
+      # 不再需要人工配 PAT。private 时代的 HAS_TOKEN 门禁已移除 ——
+      # 那道门禁的代价是所有测试被 skip，绿灯只代表 lint 过。
+      - name: Checkout sibling repos
         uses: actions/checkout@v7
         with:
           repository: hexonal/vnpy_gatewaykit
           path: _deps/vnpy_gatewaykit
-          token: ${{ secrets.VNPY_CI_TOKEN }}
 
       # fluent_ui 直接 import 的私有兄弟包不止 gatewaykit：vnpy 本体（fork）、
       # ctastrategy（闸/分段）、alphakit（install_gate_rules）、futu/usmart
       # 两个网关。少一个，Type check 与 Test 就会以 import 错误红着，而不是
       # 因为本仓代码真有问题。
       - name: Checkout vnpy fork
-        if: env.HAS_TOKEN == 'true'
         uses: actions/checkout@v7
         with:
           repository: hexonal/vnpy
           path: _deps/vnpy
-          token: ${{ secrets.VNPY_CI_TOKEN }}
 
       - name: Checkout vnpy_ctastrategy
-        if: env.HAS_TOKEN == 'true'
         uses: actions/checkout@v7
         with:
           repository: hexonal/vnpy_ctastrategy
           path: _deps/vnpy_ctastrategy
-          token: ${{ secrets.VNPY_CI_TOKEN }}
 
       - name: Checkout vnpy_alphakit
-        if: env.HAS_TOKEN == 'true'
         uses: actions/checkout@v7
         with:
           repository: hexonal/vnpy_alphakit
           path: _deps/vnpy_alphakit
-          token: ${{ secrets.VNPY_CI_TOKEN }}
 
       - name: Checkout vnpy_futu
-        if: env.HAS_TOKEN == 'true'
         uses: actions/checkout@v7
         with:
           repository: hexonal/vnpy_futu
           path: _deps/vnpy_futu
-          token: ${{ secrets.VNPY_CI_TOKEN }}
 
-      - name: Checkout vnpy_usmart
-        if: env.HAS_TOKEN == 'true'
-        uses: actions/checkout@v7
-        with:
-          repository: hexonal/vnpy_usmart
-          path: _deps/vnpy_usmart
-          token: ${{ secrets.VNPY_CI_TOKEN }}
 
       # 没有 `pip install -e .` 这一步：vnpy_app 是应用目录不是发行包，
       # pyproject.toml 里没有 [project]/[build-system]，装不了也不该装。
       # 测试自己往 sys.path 塞了仓根（见 tests/*.py 顶部），import 得到
       # fluent_ui / strategies / data_tools。
       - name: Install package
-        if: env.HAS_TOKEN == 'true'
         run: |
           pip install mypy pytest
           pip install "-e _deps/vnpy[alpha]"
@@ -106,7 +88,6 @@ jobs:
           pip install -e _deps/vnpy_ctastrategy
           pip install -e _deps/vnpy_alphakit
           pip install -e _deps/vnpy_futu
-          pip install -e _deps/vnpy_usmart
           # 公开的 App/网关/UI 依赖，PyPI 直接装。
           pip install \
             PySide6 \
@@ -121,7 +102,6 @@ jobs:
             vnpy_riskmanager
 
       - name: Type check
-        if: env.HAS_TOKEN == 'true'
         run: mypy --strict fluent_ui
 
       # 这一步是本 workflow 存在的主要理由：vnpy 与 vnpy_ctastrategy 的既有 CI
@@ -135,15 +115,7 @@ jobs:
       # tests/test_fluent_offscreen_guard.py 与 README「无显示环境下不能用
       # FluentMainWindow」一节）。
       - name: Test
-        if: env.HAS_TOKEN == 'true'
         env:
           QT_QPA_PLATFORM: offscreen
         run: pytest tests -q
 
-      - name: Notice when siblings are unavailable
-        if: env.HAS_TOKEN != 'true'
-        run: |
-          echo "::notice::未配置 VNPY_CI_TOKEN，本轮只跑了 lint。"
-          echo "::notice::类型检查与测试需要读取私有兄弟仓(vnpy_gatewaykit 等)，"
-          echo "::notice::请创建一个对 hexonal/vnpy_* 有 Contents:read 权限的"
-          echo "::notice::fine-grained PAT，存为仓库 secret VNPY_CI_TOKEN。"
