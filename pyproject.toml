@@ -79,14 +79,3 @@ disallow_subclassing_any = false
 [[tool.mypy.overrides]]
 module = ["fluent_ui.searchable_combo_box"]
 disable_error_code = ["has-type"]
-
-# QStackedWidget.widget() 的返回类型在不同 PySide6 版本的存根里不一致：
-# 本地这套标成 QWidget | None（cast 是必要的窄化），CI 那套直接标 QWidget
-# （于是同一个 cast 被 warn_redundant_casts 判成冗余）。同一份代码两个环境
-# 诊断相反，而两边都不是我们代码的问题。
-#
-# 不删 cast：删了本地就报 return Any；也不改成 if 守卫：那会把「索引必然有效」
-# 的契约变成静默 no-op，是为了让检查器满意而改行为。只在这一个模块关掉这一项。
-[[tool.mypy.overrides]]
-module = ["fluent_ui.pivot_widget"]
-warn_redundant_casts = false

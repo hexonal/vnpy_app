@@ -7,8 +7,6 @@ one tabbed section instead of each getting its own full nav page.
 
 from __future__ import annotations
 
-from typing import cast
-
 from qfluentwidgets import Pivot
 from vnpy.trader.ui import QtCore, QtWidgets
 
@@ -46,9 +44,15 @@ class PivotWidgdet(QtWidgets.QWidget):
             self.pivot.setCurrentItem(widget.objectName())
 
     def on_current_index_changed(self, index: int) -> None:
-        # QStackedWidget.widget() is typed `QWidget | None`; this slot only
-        # fires for an index the stack actually holds, so the None arm is
-        # unreachable. cast, not an `if` — adding a guard here would change
-        # behaviour (silently no-op) instead of just narrowing the type.
-        widget = cast("QtWidgets.QWidget", self.stacked_widget.widget(index))
+        # None 守卫而不是 cast：QStackedWidget.widget() 的存根标注随 PySide6
+        # 版本变化 —— 声明版本 6.8.2.1（vnpy/pyproject.toml:27）标非 Optional，
+        # 6.11 起标 QWidget | None。cast 在前者被判冗余、在后者是必需，
+        # 两个环境诊断相反；守卫在两边都成立且都不冗余。
+        #
+        # 这不只是为了让检查器闭嘴：C++ 侧 QStackedWidget::widget() 对越界索引
+        # 返回 nullptr，6.8.2.1 的存根只是没写出来。守卫比 cast 更贴近运行时
+        # 真相 —— cast 遇到 None 会在下一行抛 AttributeError 打断事件循环。
+        widget = self.stacked_widget.widget(index)
+        if widget is None:      # 索引越界；正常路径不会走到
+            return
         self.pivot.setCurrentItem(widget.objectName())
