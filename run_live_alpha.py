@@ -64,6 +64,11 @@ from vnpy_riskmanager import RiskManagerApp
 
 DEFAULT_DUPLICATE_STORE = Path.home() / ".vntrader" / "alpha_live_duplicates.csv"
 
+#: Declared stops of open positions, mirrored so a restart does not leave them
+#: unwatched. Defaulted on rather than opt-in: the failure it prevents is
+#: "already in a position, then restart", which is ordinary operations.
+DEFAULT_STOP_STORE = Path.home() / ".vntrader" / "alpha_live_stops.json"
+
 #: The broker never described the universe, so nothing could be subscribed.
 EXIT_NO_CONTRACTS = 5
 
@@ -126,6 +131,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--duplicate-store", default=str(DEFAULT_DUPLICATE_STORE),
         help="File the duplicate-order window persists to across processes",
+    )
+    parser.add_argument(
+        "--stop-store", default=str(DEFAULT_STOP_STORE),
+        help=(
+            "File the declared stops of open positions are mirrored to, so a "
+            "restart keeps watching them instead of starting blind"
+        ),
     )
     parser.add_argument("--futu-host", default=os.environ.get("FUTU_OPEND_HOST", "127.0.0.1"))
     parser.add_argument(
@@ -240,6 +252,7 @@ def main(argv: list[str] | None = None) -> int:
             trade_gateway="FUTU",
             quote_max_age_seconds=args.quote_max_age,
             duplicate_store=args.duplicate_store,
+            stop_store=args.stop_store,
         )
         engine.add_strategy(EquityDemoStrategy, {}, signal)
         # Belt and braces: wait_for_contracts already proved the OMS has them,
