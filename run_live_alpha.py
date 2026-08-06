@@ -60,6 +60,7 @@ from vnpy.trader.event import EVENT_LOG
 from vnpy_alphakit.live import AlphaLiveEngine, AlphaLiveEngineError
 from vnpy_alphakit.rules import install_gate_rules
 from vnpy_futu import FutuGateway
+from vnpy_gatewaykit.shutdown import install_shutdown_handlers, verify_owns_signals
 from vnpy_riskmanager import RiskManagerApp
 
 DEFAULT_DUPLICATE_STORE = Path.home() / ".vntrader" / "alpha_live_duplicates.csv"
@@ -200,6 +201,24 @@ def wait_for_positions(engine: AlphaLiveEngine, timeout: float) -> bool:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Before anything else, and specifically *after* the imports above.
+    #
+    # `import vnpy_futu` pulls in futu, whose module body unconditionally does
+    # `signal.signal(SIGINT, quit_handler)` where quit_handler is a bare
+    # `os._exit(0)` (site-packages/futu/__init__.py:126-132). os._exit skips
+    # `finally`, skips atexit, and exits 0 — so the `finally: main_engine.close()`
+    # at the bottom of this function, which is the only thing that reaches
+    # AlphaLiveEngine.cancel_working_orders_on_exit(), never runs on Ctrl-C, and
+    # the exit code tells whatever supervises this that the run finished cleanly.
+    # Measured: a script importing futu, raising SIGINT at itself, with a
+    # `finally` that prints — prints nothing, returns 0.
+    #
+    # SIGTERM/SIGHUP are a separate cause with the same symptom (no handler at
+    # all, CPython default terminates outright); install_shutdown_handlers takes
+    # all three. Installing here rather than at module scope keeps the side
+    # effect on the entry path instead of on `import run_live_alpha`.
+    install_shutdown_handlers()
+
     args = build_parser().parse_args(argv)
     vt_symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
     if not vt_symbols:
@@ -284,6 +303,15 @@ def main(argv: list[str] | None = None) -> int:
             except AlphaLiveEngineError as exc:
                 print(f"实盘前置检查未通过: {exc}", file=sys.stderr)
                 return 4
+
+        # connect() above created futu contexts and started their threads. Nothing
+        # in that path is *supposed* to touch signal dispositions, but the whole
+        # reason this file installs handlers at all is that a third-party module
+        # did exactly that, silently, from its module body. A stolen handler
+        # leaves no log line — the process simply stops honouring `finally`
+        # again — so check rather than assume, while there is still nothing to
+        # unwind if the check fails.
+        verify_owns_signals()
 
         return run_loop(engine, args.interval)
     finally:
