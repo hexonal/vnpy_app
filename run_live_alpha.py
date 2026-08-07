@@ -26,6 +26,11 @@ Safety posture (all of it deliberate)
   contracts before subscribing and exits with ``EXIT_NO_CONTRACTS`` if they
   never come.  An unsubscribed universe produces no ticks, hence empty bar
   slices, hence no orders — a no-op that otherwise looks like a healthy run.
+* **A signal from another code generation never reaches the gate.**  The lab
+  refuses to load an artifact whose feature semantics do not match this code,
+  and this runner turns that refusal into ``EXIT_STALE_SIGNAL`` plus a line
+  saying what to recompute.  The refusal itself is not optional here — the
+  signal is the *only* input to every position this process would take.
 * **Stale quotes do not become prices** — ``quote_max_age_seconds`` is set,
   and a rebalance with no fresh quote fails closed in live mode.
 * **The duplicate window persists to disk**, so a cron rerun of this script
@@ -53,6 +58,7 @@ from pathlib import Path
 os.environ.setdefault("LANGUAGE", "zh_CN")
 
 from vnpy.alpha.lab import AlphaLab
+from vnpy.alpha.semantics import AlphaSemanticsError
 from vnpy.alpha.strategy.strategies.equity_demo_strategy import EquityDemoStrategy
 from vnpy.event import Event, EventEngine
 from vnpy.trader.engine import MainEngine
@@ -72,6 +78,15 @@ DEFAULT_STOP_STORE = Path.home() / ".vntrader" / "alpha_live_stops.json"
 
 #: The broker never described the universe, so nothing could be subscribed.
 EXIT_NO_CONTRACTS = 5
+
+#: The signal file exists and reads fine, but it was computed under feature
+#: semantics this code no longer speaks. Deliberately **not** folded into the
+#: ``2`` that a missing basket returns: 2 means the operator named the wrong
+#: thing and is fixed by naming another basket, whereas this means the artifact
+#: is right and merely old, and is fixed only by recomputing it. The blast
+#: radius differs too — a typo stops one run, a semantics bump stops every
+#: basket in the lab at once, which is a fleet-wide alert rather than a slip.
+EXIT_STALE_SIGNAL = 6
 
 
 def _on_log(event: Event) -> None:
@@ -226,7 +241,41 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     lab = AlphaLab(args.lab)
-    signal = lab.load_signal(args.basket)
+
+    # The semantics gate raises rather than returning None, and it raises here
+    # — measured: the traceback's innermost runner frame is this line, and
+    # `build_main_engine()` below has not run, so at this moment there is no
+    # gateway object, no connect thread, no OMS and nothing working at the
+    # broker. That is the entire reason this is a safe place to add a handler
+    # on a live-trading entry point: the process has not yet touched anything
+    # it would have to unwind.
+    #
+    # What is being fixed is legibility, not safety. An uncaught
+    # AlphaSemanticsError already fails closed — bare traceback, exit 1,
+    # nothing sent. But this script's convention everywhere else is a Chinese
+    # sentence on stderr naming the remedy plus a distinguishable code, and an
+    # operator who gets a 40-line polars/pickle traceback instead reads it as
+    # "the tool is broken" rather than "my artifact is stale" — and the
+    # tempting next move from there is to go around the check.
+    #
+    # Only AlphaSemanticsError, not a blanket `except Exception`. A wider
+    # catch would have to print a remedy it cannot know is right, and it would
+    # dress genuine defects — an AttributeError from a bad refactor here — up
+    # as a tidy operational exit code, which is how a bug becomes a nightly
+    # alert nobody reads. Every other way `load_signal` can fail still ends in
+    # a traceback, which is still non-zero and still before the gateway.
+    try:
+        signal = lab.load_signal(args.basket)
+    except AlphaSemanticsError as exc:
+        print(
+            f"信号 {args.basket!r} 的特征语义版本与当前代码不符, 拒绝上实盘 —— "
+            f"用旧口径特征算出来的持仓目标在新口径下没有意义。\n{exc}\n"
+            f"本脚本只读 signal, 不会替你重算: 请回到研究流程重跑 "
+            f"dataset → model → signal, 再跑本脚本。",
+            file=sys.stderr,
+        )
+        return EXIT_STALE_SIGNAL
+
     if signal is None or signal.is_empty():
         print(
             f"AlphaLab {args.lab!r} 里没有名为 {args.basket!r} 的信号 —— "
