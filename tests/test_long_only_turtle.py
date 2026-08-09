@@ -11,6 +11,8 @@ import os
 import sys
 from datetime import datetime, timedelta
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from vnpy.trader.constant import Direction, Exchange, Interval, Offset
@@ -254,3 +256,89 @@ def test_strategy_runs_on_daily_bars_not_minutes() -> None:
     # the same daily code path, so backtest and live share one timeframe.
     routing = inspect.getsource(LongOnlyTurtleStrategy.on_bar)
     assert "Interval.DAILY" in routing and "on_daily_bar" in routing
+
+
+# ---------------------------------------------------------------------------
+# Stop declared to the risk gate
+# ---------------------------------------------------------------------------
+
+
+def test_declared_stop_is_the_atr_leg_off_the_quoted_price() -> None:
+    """The gate needs the stop before the order leaves; on_trade only has it after."""
+    strat, _ = _make_strategy(atr_stop=2.0)
+    strat.atr_value = 2.05
+    declared = strat.get_stop_price("0700.SEHK", Direction.LONG, 103.75)
+    assert declared == pytest.approx(103.75 - 2.0 * 2.05)
+
+
+def test_declared_stop_equals_what_on_trade_will_write_into_long_stop() -> None:
+    """Same formula, one step early — they must not be allowed to drift apart."""
+    strat, _ = _make_strategy(atr_stop=2.0)
+    strat.atr_value = 2.05
+    quote: float = 103.75
+    declared = strat.get_stop_price("0700.SEHK", Direction.LONG, quote)
+
+    strat.on_trade(
+        TradeData(
+            gateway_name="t", symbol="0700", exchange=Exchange.SEHK,
+            orderid="1", tradeid="1", direction=Direction.LONG,
+            price=quote, volume=100, datetime=datetime(2026, 1, 5, 9, 30),
+        )
+    )
+    assert declared == pytest.approx(strat.long_stop)
+
+
+def test_declared_stop_ignores_the_exit_channel_so_risk_is_never_understated() -> None:
+    """max(long_stop, exit_down) is the resting level; declaring it would flatter.
+
+    Measured on this fixture: the armed sell sits at 100.50 (3.25/share) while
+    the ATR leg is 99.65 (4.10/share). The gate must see the floor.
+    """
+    strat, _ = _make_strategy(atr_stop=2.0)
+    strat.atr_value = 2.05
+    strat.exit_down = 100.50
+    declared = strat.get_stop_price("0700.SEHK", Direction.LONG, 103.75)
+    assert declared == pytest.approx(99.65)
+    assert declared < strat.exit_down
+
+
+def test_a_reducing_order_declares_no_stop() -> None:
+    """increases_exposure exempts a covered sell; a level below the quote would
+    be refused by check_stop_side and would wall off the exit."""
+    strat, _ = _make_strategy()
+    strat.atr_value = 2.05
+    assert strat.get_stop_price("0700.SEHK", Direction.SHORT, 103.75) is None
+
+
+def test_no_stop_is_declared_before_atr_is_ready() -> None:
+    strat, _ = _make_strategy()
+    for atr in (0.0, -1.0, float("nan")):
+        strat.atr_value = atr
+        assert strat.get_stop_price("0700.SEHK", Direction.LONG, 103.75) is None
+
+
+def test_no_stop_is_declared_for_a_zero_quote() -> None:
+    """check_stop_order hands over 0.0 whenever limit_up and ask_price_5 are both
+    empty; price - 2N would then be negative and pretend to be a stop."""
+    strat, _ = _make_strategy()
+    strat.atr_value = 5.0
+    for quote in (0.0, -1.0, float("nan")):
+        assert strat.get_stop_price("0700.SEHK", Direction.LONG, quote) is None
+
+
+def test_no_stop_is_declared_when_the_atr_leg_would_not_protect() -> None:
+    """A stop at or above the entry is not a stop. Reachable with a huge N on a
+    cheap name — say it out loud rather than declare a level that cannot hold."""
+    strat, _ = _make_strategy(atr_stop=2.0)
+    strat.atr_value = 60.0
+    assert strat.get_stop_price("0700.SEHK", Direction.LONG, 103.75) is None
+
+
+def test_pyramid_adds_declare_off_their_own_rung_not_the_first_fill() -> None:
+    """atr_value is frozen while a position is open, so every rung declares the
+    same 2N distance measured from its own quote."""
+    strat, _ = _make_strategy(atr_stop=2.0)
+    strat.atr_value = 2.0
+    quotes = (100.0, 101.0, 102.0, 103.0)
+    declared = [strat.get_stop_price("0700.SEHK", Direction.LONG, q) for q in quotes]
+    assert declared == [pytest.approx(q - 4.0) for q in quotes]

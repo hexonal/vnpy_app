@@ -45,6 +45,7 @@ called anything more, and real edge has to come from filters layered on top.
 # Imported as a module, not `from ... import StatefulCtaTemplate`: CtaEngine's
 # class scanner registers every CtaTemplate subclass it finds in dir(module),
 # so an imported base class would show up in the "add strategy" dropdown.
+import math
 from datetime import time as _time
 
 from vnpy.trader.constant import Exchange, Interval
@@ -308,6 +309,80 @@ class LongOnlyTurtleStrategy(strategy_state.StatefulCtaTemplate):
 
     def on_stop_order(self, stop_order: StopOrder) -> None:
         pass
+
+    def get_stop_price(
+        self, vt_symbol: str, direction: Direction, price: float
+    ) -> float | None:
+        """Stop declared to the risk gate for one order: ``price - atr_stop * N``.
+
+        This is the SAME number ``on_trade`` will write into ``long_stop`` once
+        the order fills (``trade.price - self.atr_stop * self.atr_value``),
+        computed one step early off the price about to be quoted.  The three
+        in-house gates sit on ``MainEngine.send_order`` and need the stop
+        *before* the order leaves, while ``on_trade`` only has it afterwards.
+        ``atr_value`` is frozen for as long as a position is open — ``on_bar``
+        recomputes it only in the flat branch — so the two agree to the last
+        digit whenever the fill lands on the quote, for the first unit and for
+        every pyramid add alike.
+
+        Without this override the base class returns ``None``, no ``|stop=``
+        suffix reaches the request, and 强制止损检查 refuses every entry.
+        Measured end to end before this existed: four armed rungs, four
+        refusals, zero orders at the gateway, ``pos`` stuck at 0 forever.
+
+        Why the exit channel is deliberately not folded in
+        --------------------------------------------------
+
+        ``on_bar`` arms the protective sell at ``max(long_stop, exit_down)``, so
+        the level actually resting in the market is often *above* this one —
+        measured on a synthetic breakout: fill 103.75, N 2.05, this method
+        declares 99.65 while the armed sell sits at 100.50, which is 3.25 versus
+        4.10 of risk per share.  Declaring the ``max`` would match the resting
+        order exactly and **understate** the risk, and that is the one direction
+        this number must not err in:
+
+        * ``max(long_stop, exit_down) >= long_stop`` always holds, so the ATR
+          leg is the floor of every exit this strategy can take.  The gate asks
+          what this order can lose; the honest answer is bounded by the floor,
+          not by wherever the 10-day low happens to sit today.
+        * Between a fill and the next daily close the channel leg is not in the
+          market **at all** — ``on_bar`` re-arms the sell before the new unit
+          exists, and ``_rearm_pending`` only covers a process restart, not this
+          window.  For that stretch the ATR leg is the whole protection.
+        * ``exit_down`` is a rolling minimum recomputed every bar and is in
+          ``derived_vars`` precisely because it is not persisted; ``long_stop``
+          is frozen at the fill.  Declaring off a drifting number would let the
+          same order clear the gate today and fail it tomorrow.
+
+        The cost is stated plainly: while the channel leg is the binding exit,
+        the declared risk is **conservative**, and 单笔风险上限 will refuse some
+        orders whose true risk was smaller.  That is the recoverable direction.
+
+        A reducing order declares nothing.  ``increases_exposure`` already
+        exempts a sell that is covered by the OMS net position, and handing a
+        SHORT leg a level *below* the quote would be refused by
+        ``check_stop_side`` as offering no protection — which would wall off the
+        exit rather than protect it.  When the net position does not cover the
+        sell the gate is right to refuse: that is a naked short, and a decorative
+        stop must not be the thing that lets it through.
+        """
+        if direction != Direction.LONG:
+            return None
+        # math.isfinite rather than a bare comparison: a NaN atr_value makes
+        # every comparison False, so `if atr <= 0: refuse` would invert into
+        # allow and declare a NaN stop.
+        if not math.isfinite(self.atr_value) or self.atr_value <= 0.0:
+            return None
+        if not math.isfinite(price) or price <= 0.0:
+            return None
+        stop: float = price - self.atr_stop * self.atr_value
+        if not math.isfinite(stop) or stop <= 0.0 or stop >= price:
+            # No log here on purpose. CtaEngine already writes one line per
+            # refusal via explain_rejection, and check_stop_order retries on
+            # *every* tick — a second line from here would multiply the spam
+            # rather than add information.
+            return None
+        return stop
 
     def _compute_unit(self) -> int:
         """Turtle unit size in shares: risk risk_percent of capital per 1N
