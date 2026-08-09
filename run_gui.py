@@ -65,6 +65,7 @@ from fluent_ui.backtester_segments import install_segment_notice
 from fluent_ui.backtester_strategy_labels import install_strategy_labels
 from fluent_ui.backtester_symbol_search import install_symbol_search
 from fluent_ui.gateway_config import load_all_configs
+from fluent_ui.local_strategies import install_local_strategies
 
 
 def main() -> None:
@@ -159,6 +160,21 @@ def main() -> None:
     main_engine.add_app(CtaBacktesterApp)
     main_engine.add_app(DataManagerApp)
     main_engine.add_app(ChartWizardApp)
+
+    # Both engines scan `Path.cwd()/"strategies"` for user strategies, and
+    # MainEngine.__init__ has already run os.chdir(TRADER_DIR) by now — so they
+    # look in ~/strategies, which does not exist, and this repo's own strategies
+    # have never once appeared in either dropdown. The failure is completely
+    # silent: an empty glob means not one import is attempted, so even the
+    # loader's own except branch never runs. See fluent_ui/local_strategies.py
+    # for why this is fixed here rather than in the fork.
+    local_strategies, strategy_failures = install_local_strategies(main_engine)
+    if local_strategies:
+        main_engine.write_log(f"已装载本仓策略: {', '.join(local_strategies)}")
+    else:
+        main_engine.write_log("本仓 strategies/ 下没有可用策略——下拉框里只会有上游自带的那几个")
+    for failure in strategy_failures:
+        main_engine.write_log(failure)
 
     # The backtester panel hardcodes which statistics keys it renders, so
     # anything added to the statistics dict later is computed but invisible —
