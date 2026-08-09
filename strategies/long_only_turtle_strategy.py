@@ -34,6 +34,98 @@ listed there (engine.py:689) — so every restart silently reset them:
 They are now declared in `internal_vars`: persisted like everything else, but
 kept out of the GUI. Operator-facing values stay in `display_vars`.
 
+HK AND US ARE BOTH FIRST-CLASS
+------------------------------
+This strategy shipped into the GUI dropdown (fe9cfb5) carrying three market
+assumptions that had never been exercised, each of them right on exactly one
+of the two markets it claims to trade. All three now read the same shared
+sources the rest of this fork reads, so neither market is the special case:
+
+  * **Board lot comes from the contract.** `board_lot` was a parameter
+    defaulting to 1 — correct for US, wrong for every HK line, and the true
+    value was already sitting in the OMS (both gateways write
+    ``size=1, min_volume=<每手股数>``; vnpy_usmart/gateway.py:748 and
+    vnpy_futu/futu_mapping.py:326). The parameter survives only as the
+    fallback for when no contract has been pushed — a backtest, or a live
+    session where the gateway has not finished querying instruments.
+  * **The daily boundary comes from the session table.** It used to be a
+    two-row dict copied into this file, with `.get(exchange, 16:00)` — so an
+    exchange nobody had mapped got a silent, invented close. It is now
+    derived from `vnpy_gatewaykit.sessions`, which is the single source of
+    truth market_clock/query_window/tick_filter all already consume, and an
+    unmapped exchange is refused rather than defaulted. That is the same
+    policy market_tz has held since it was written: 宁可拒绝也不让错误的默认值
+    静默生效。
+  * **Only continuous-session ticks reach the strategy.** See the next
+    section — this is the one that could lose money today.
+
+EXTENDED HOURS (the US-only landmine)
+-------------------------------------
+`on_tick` used to hand every tick straight to the BarGenerator. HK has no
+continuous pre/post session, so the defect could not show on 0700.SEHK — the
+only symbol this file was ever tested against. US does: futu subscribes SMART
+with `extended_time=True`, which delivers 04:00–09:30 and 16:00–20:00 ET
+prints. Two distinct consequences, and they need two distinct fixes because
+they happen in two different processes' worth of code:
+
+  (a) **Bar contamination.** A thin 04:12 print becomes the day's open, and a
+      single after-hours cross becomes the high. Donchian channels and ATR
+      then describe prices at which the regular session never traded. Fixed
+      here: `on_tick` admits a tick only when
+      `sessions.is_open(exchange, tick.datetime, kinds={REGULAR})`.
+  (b) **Local stop orders firing on an extended print.** This one is NOT
+      reachable from `on_tick`: `CtaEngine.check_stop_order` (engine.py:230)
+      walks `self.stop_orders` on *every* tick event, before any strategy
+      callback, and triggers on `tick.last_price >= stop.price`. Filtering
+      our own `on_tick` does nothing about it — measured shape of the
+      disaster: four pyramid rungs meant for 102/103/104 all filling on one
+      04:12 print. The only lever a strategy has is to **not leave orders
+      resting outside the session**, so the first tick at or after the day's
+      regular close cancels everything and sets `_rearm_pending`; the first
+      regular tick of the next day re-arms the protective sell, and the
+      following daily bar rebuilds the ladder.
+
+`vnpy_gatewaykit.tick_filter.TickFilterMixin` was read before writing this and
+deliberately not used. It is gateway-side by construction ("Mix in BEFORE
+BaseGateway … replace every `self.on_tick(tick)` call site with
+`self.push_tick(...)`"), because it needs the broker status fields that exist
+only where the tick is produced. Three consequences make it the wrong tool
+here: a strategy cannot reach those call sites; its default mode is OBSERVE,
+which drops nothing, so adopting it without also writing an enforcement policy
+would be decoration; and enforcing PHASE_NOT_ALLOWED at the gateway would
+remove extended ticks from *every* consumer on the bus, including the recorder
+that is supposed to store them. What this strategy needs is a pure function of
+(exchange, instant), and `sessions.active_session` is exactly that — the same
+function `TickFilter._clock_phase` itself calls. So the truth source is
+reused; the enforcement engine is not.
+
+Cancelling at the close is a real behaviour change with a real cost, stated
+plainly: between 16:00 and the next day's first regular tick this strategy
+holds a position with no resting protective order. That is deliberate. The
+protective sell is a *local* stop — it lives in this process, not at the
+broker — and firing it on a 04:12 print means selling into the thinnest book
+of the day at a price the regular session never confirmed. Re-arming on the
+first regular tick restores protection within one tick of the open, and a
+genuine overnight gap triggers the re-armed stop immediately anyway.
+
+DAILY BAR COMPLETION MOVED
+--------------------------
+Dropping the post-close ticks also drops what used to complete the daily bar:
+`BarGenerator.update_bar_daily_window` flushes on `bar.datetime.time() >=
+daily_end`, and with 16:00 as the boundary the flush was being driven by the
+very extended-hours prints (US) and closing-auction prints (HK) that are now
+refused. Completion therefore falls through to the fork's date-rollover flush
+(vnpy/trader/utility.py:467-482), which fires on the first minute bar of the
+next session — measured effect: `on_daily_bar` runs at about 09:31 local
+instead of 16:00 local. This is not a new code path being invented for the
+occasion; that rollover flush was added precisely because "any session that
+never produced a bar stamped exactly daily_end" was merging two days into one,
+and a thin name with no after-hours print already took it. The cost is that
+the ladder is rebuilt one minute into the session rather than the evening
+before, so a breakout inside the opening minute is missed; the orders resting
+through that minute are the previous day's, which is what would have been
+resting at 09:30 under the old scheme too.
+
 HONESTY (per this project's doctrine): this is a textbook public breakout
 system — risk/discipline scaffolding (structural stop + add-only-to-winners +
 mechanical exit), NOT a proven alpha engine. Donchian breakout edge on liquid
@@ -46,9 +138,11 @@ called anything more, and real edge has to come from filters layered on top.
 # class scanner registers every CtaTemplate subclass it finds in dir(module),
 # so an imported base class would show up in the "add strategy" dropdown.
 import math
+from datetime import date, datetime
 from datetime import time as _time
 
 from vnpy.trader.constant import Exchange, Interval
+from vnpy.trader.object import ContractData
 from vnpy_ctastrategy import (
     ArrayManager,
     BarData,
@@ -59,16 +153,74 @@ from vnpy_ctastrategy import (
     TickData,
     TradeData,
 )
+from vnpy_gatewaykit.market_clock import market_tz
+from vnpy_gatewaykit.sessions import SessionKind, day_close, is_open
 
 import strategy_state
 
-# Local close, used to tell BarGenerator where a trading day ends when it
-# aggregates minute bars into daily ones. Both markets close at 16:00 local
-# (HKEX 16:00 HKT after the closing auction, US 16:00 ET regular session).
-_MARKET_CLOSE: dict[Exchange, _time] = {
-    Exchange.SEHK: _time(16, 0),
-    Exchange.SMART: _time(16, 0),
-}
+# The only session kind this strategy will look at. Declared once because the
+# three places that ask (the tick gate, the close detector, the daily boundary)
+# must not be able to drift apart — that drift is how the strategy would end up
+# building bars out of one set of windows and closing its day on another.
+_REGULAR_ONLY: frozenset[SessionKind] = frozenset({SessionKind.REGULAR})
+
+# A fixed Monday, used for one question only: "what local wall-clock time does
+# the continuous session end". A date is needed because sessions.day_close
+# resolves windows per calendar day, and the answer must not depend on when the
+# strategy happens to be constructed (a Sunday would answer None). Local close
+# times do not move with DST — 16:00 ET is 16:00 ET in both halves of the year,
+# which is the whole reason sessions.py stores local times rather than offsets —
+# so any trading day gives the same answer and a constant is honest here.
+_CLOSE_PROBE_DAY: date = date(2026, 1, 5)
+
+
+def _resolve_exchange(vt_symbol: str) -> Exchange:
+    """Exchange out of the vt_symbol suffix, refusing anything unrecognised.
+
+    Refusing rather than guessing matters more than it looks: every downstream
+    market fact this strategy needs — timezone, session windows, the daily
+    boundary — is keyed on this value, and a wrong key produces plausible
+    numbers rather than an error.
+    """
+    suffix: str = vt_symbol.split(".")[-1]
+    try:
+        return Exchange(suffix)
+    except ValueError as exc:
+        raise ValueError(
+            f"无法从 vt_symbol 解析交易所，本策略拒绝按默认交易所继续，收到 {vt_symbol!r}"
+        ) from exc
+
+
+def _regular_close(exchange: Exchange) -> _time:
+    """Local time at which the exchange's continuous session ends.
+
+    HK answers 16:00 HKT (the 16:00–16:10 closing auction is a separate
+    AUCTION window and is not part of continuous trading), US answers 16:00
+    ET. The two agreeing is a coincidence of these two markets, not a licence
+    to hardcode it — the previous version of this file hardcoded exactly that
+    agreement plus a `.get(exchange, 16:00)` default, and the default is what
+    would have shipped a wrong daily boundary the day someone added a third
+    market. An unmapped exchange raises instead.
+
+    The KeyError caught below can come from either of the two maps — sessions
+    has no window row, or market_clock has no timezone (sessions.windows asks
+    market_tz first). Both are the same operator action, so they get one
+    message that names both files rather than two that differ by which map was
+    reached first.
+    """
+    try:
+        close: datetime | None = day_close(exchange, _CLOSE_PROBE_DAY, kinds=_REGULAR_ONLY)
+    except KeyError as exc:
+        raise ValueError(
+            f"该交易所没有交易时段定义，本策略拒绝按 16:00 兜底运行；请先在 "
+            f"vnpy_gatewaykit 的 sessions._SESSIONS 与 market_clock._MARKET_TZ_NAME "
+            f"里补齐，收到 {exchange.value!r}"
+        ) from exc
+    if close is None:
+        raise ValueError(
+            f"该交易所没有连续竞价时段，本策略只在连续盘交易，收到 {exchange.value!r}"
+        )
+    return close.time()
 
 
 class LongOnlyTurtleStrategy(strategy_state.StatefulCtaTemplate):
@@ -83,7 +235,7 @@ class LongOnlyTurtleStrategy(strategy_state.StatefulCtaTemplate):
     atr_window: int = 20          # N = ATR window
     trading_capital: float = 100000.0   # account capital used for unit sizing
     risk_percent: float = 1.0     # % of capital risked per unit per 1N move
-    board_lot: int = 1            # shares per lot (HK: 100/500/...; US: 1)
+    board_lot: int = 1            # FALLBACK lot only; the contract wins (_resolve_board_lot)
     max_units: int = 4            # pyramiding cap
     atr_stop: float = 2.0         # stop = entry - atr_stop * N
 
@@ -97,6 +249,7 @@ class LongOnlyTurtleStrategy(strategy_state.StatefulCtaTemplate):
 
     # --- derived: shown, recomputed every bar, deliberately NOT persisted ---
     exit_down: float = 0.0        # 10-day low (exit channel)
+    effective_lot: int = 0        # board lot actually in force (contract, else param)
 
     # --- state: persisted, hidden from the GUI ---
     _pyramid_base: float = 0.0    # breakout price the add ladder hangs off
@@ -106,6 +259,21 @@ class LongOnlyTurtleStrategy(strategy_state.StatefulCtaTemplate):
 
     # --- transient: rebuilt every process start, never persisted ---
     _rearm_pending: bool = False  # re-place the protective stop after a restart
+    # Resolved once in on_init, and the readiness sentinel for everything that
+    # needs a market clock. It is assigned LAST, after bg/am exist, so that
+    # `_exchange is not None` means "this object is fully built" — which matters
+    # because CtaEngine._init_strategy sets `inited = True` unconditionally
+    # (engine.py:763) even when call_strategy_func has just swallowed an
+    # exception out of on_init. Without the sentinel, a strategy whose exchange
+    # was refused would still be fed ticks and would die on a missing self.bg.
+    _exchange: Exchange | None = None
+    _naive_tick_logged: bool = False  # one line per process, not one per tick
+    _cleared_date: str = ""       # ISO local date whose close already cancelled
+    _lot_source: str = ""         # last logged provenance of the board lot
+    # "a protective sell is believed to be resting". Written by the two places
+    # that place one and cleared by the two that cancel, so `on_ready` can tell
+    # a genuine restart (nothing resting) from its own late arrival.
+    _stop_armed: bool = False
 
     parameters = [
         "entry_window", "breakout_window", "exit_window", "atr_window",
@@ -138,8 +306,17 @@ class LongOnlyTurtleStrategy(strategy_state.StatefulCtaTemplate):
     # it was at the last fill (possibly weeks of bars ago) on top of the correct
     # fresh value — and that stale number is what the post-restart protective
     # stop would be armed with.
-    derived_vars = ["exit_down"]
-    transient_vars = ["am", "bg", "_rearm_pending"]
+    # effective_lot joins it for the same reason from the other direction: it is
+    # a fact about the *contract*, not about this strategy's history, and the
+    # contract can legitimately change under us (an HK lot-size revision, or a
+    # restart that resolves the symbol on a different gateway). Persisting it
+    # would let a stale lot outlive the contract that produced it.
+    derived_vars = ["exit_down", "effective_lot"]
+    transient_vars = [
+        "am", "bg", "_rearm_pending",
+        "_exchange", "_naive_tick_logged", "_cleared_date", "_lot_source",
+        "_stop_armed",
+    ]
 
     state_version = 1
 
@@ -154,17 +331,28 @@ class LongOnlyTurtleStrategy(strategy_state.StatefulCtaTemplate):
         # 14.8x capital per unit, 59x at max_units=4. On daily bars the same
         # parameters size a unit at 0 shares (HKD 100k cannot buy one lot at
         # that N) and the strategy correctly declines to enter.
-        exchange: Exchange = Exchange(self.vt_symbol.split(".")[-1])
+        #
+        # The daily boundary is asked of the session table rather than declared
+        # here. Both mapped markets answer 16:00 local, but the value now comes
+        # from the same rows the tick gate below filters on, so "which windows
+        # feed the bar" and "when does the bar close" cannot disagree.
+        exchange: Exchange = _resolve_exchange(self.vt_symbol)
+        daily_end: _time = _regular_close(exchange)
         self.bg: BarGenerator = BarGenerator(
             self.on_minute_bar,
             1,
             self.on_daily_bar,
             Interval.DAILY,
-            daily_end=_MARKET_CLOSE.get(exchange, _time(16, 0)),
+            daily_end=daily_end,
         )
         # ArrayManager must hold enough bars for the widest window (55-day).
         self.am: ArrayManager = ArrayManager(size=self.breakout_window + 10)
         self._rearm_pending = False
+        self._stop_armed = False
+        self._naive_tick_logged = False
+        self._cleared_date = ""
+        self._lot_source = ""
+        self._exchange = exchange     # assigned last: it is the readiness sentinel
 
         # NOTE: the persisted fields are deliberately NOT initialised here.
         # Replaying history through on_bar below runs with pos == 0 (the engine
@@ -190,6 +378,19 @@ class LongOnlyTurtleStrategy(strategy_state.StatefulCtaTemplate):
         # A restart leaves no orders in the engine, so the protective sell stop
         # is gone. on_bar re-places it, but on a daily strategy that can be a
         # whole session away — re-arm on the first tick after start instead.
+        #
+        # `_stop_armed` guards against this callback arriving LATE. It is driven
+        # by StatefulCtaTemplate._ensure_ready, which fires on the first
+        # send_order or the first get_data of the process, whichever comes
+        # first — and once the close-time cancel became a second producer of
+        # `_rearm_pending`, "first send_order" could be the re-armed protective
+        # sell itself. Setting the flag again from inside that very send makes
+        # the next tick place a SECOND stop for the same shares; both trigger
+        # together and the position flips short. Measured in
+        # test_the_protective_stop_is_rearmed_on_the_next_sessions_first_regular_tick,
+        # which failed on exactly this before the guard existed.
+        if self._stop_armed:
+            return
         self._rearm_pending = True
 
         broker_pos = self.broker_net_position()
@@ -202,6 +403,7 @@ class LongOnlyTurtleStrategy(strategy_state.StatefulCtaTemplate):
     def on_reset(self, reason: str) -> None:
         self.write_log(f"策略状态已重置 ({reason})")
         self._rearm_pending = False
+        self._stop_armed = False
 
     def on_start(self) -> None:
         self.write_log("策略启动")
@@ -210,11 +412,94 @@ class LongOnlyTurtleStrategy(strategy_state.StatefulCtaTemplate):
         self.write_log("策略停止")
 
     def on_tick(self, tick: TickData) -> None:
-        self._rearm_protective_stop()
-        self.bg.update_tick(tick)
+        """Continuous-session ticks build bars; everything else is refused.
+
+        The refusal is not "ignore and move on" for one case: the first tick at
+        or after the day's continuous close takes the orders down, because a
+        resting local stop is triggered by CtaEngine, not by this method, and
+        CtaEngine does not know what a session is.
+        """
+        exchange: Exchange | None = self._exchange
+        if exchange is None:
+            return
+
+        local: datetime | None = self._local_moment(tick, exchange)
+        if local is None:
+            return
+
+        if is_open(exchange, local, kinds=_REGULAR_ONLY):
+            self._rearm_protective_stop()
+            self.bg.update_tick(tick)
+            return
+
+        self._clear_orders_after_regular_close(exchange, local)
+
+    def _local_moment(self, tick: TickData, exchange: Exchange) -> datetime | None:
+        """The tick's instant in the exchange's own wall clock, or None to drop.
+
+        None means refuse, never default. A naive timestamp has no instant at
+        all: `sessions._local` raises on one, and letting that raise here would
+        be worse than dropping, because `call_strategy_func` would flip
+        `inited`/`trading` off on the first such tick and take the position's
+        protection with it. Dropping is logged exactly once per process — a
+        feed that produces one naive tick produces every tick that way, and a
+        per-tick line would bury the log rather than inform it.
+        """
+        if tick.datetime.tzinfo is None:
+            if not self._naive_tick_logged:
+                self._naive_tick_logged = True
+                self.write_log(
+                    f"丢弃裸时间戳行情：无法判定所处交易时段，收到 {tick.datetime!r}"
+                )
+            return None
+        return tick.datetime.astimezone(market_tz(exchange))
+
+    def _clear_orders_after_regular_close(
+        self, exchange: Exchange, local: datetime
+    ) -> None:
+        """Take every resting order down once the continuous session is over.
+
+        Deliberately keyed on the *day's* close and not on "not REGULAR". The
+        naive version breaks HK and only HK: 12:00–13:00 is a genuine
+        non-REGULAR hole, so cancelling on it would strip the ladder and the
+        protective stop for the whole afternoon session and not rebuild them
+        until the next day's bar. Asking `day_close` instead means both markets
+        are handled by their own 16:00 and the HK lunch hour, the HK pre-open
+        auction and the US pre-market all fall on the same "leave it alone"
+        branch.
+
+        `_rearm_pending` is reused rather than reinvented: the restart path
+        already means exactly "a position exists and its protective stop does
+        not", which is precisely the state a close-time cancel creates.
+        """
+        day_key: str = local.date().isoformat()
+        if self._cleared_date == day_key:
+            return
+
+        close: datetime | None = day_close(exchange, local.date(), kinds=_REGULAR_ONLY)
+        if close is None or local < close:
+            # A non-trading day (nothing was armed), or still before the close —
+            # the lunch break and the pre-market both land here.
+            return
+
+        self._cleared_date = day_key
+        self.cancel_all()
+        self._stop_armed = False
+        if self.pos > 0:
+            self._rearm_pending = True
+            tail: str = f"持仓 {self.pos:.0f} 股的保护性止损将在下一个连续盘首笔行情补挂"
+        else:
+            tail = "当前无持仓"
+        self.write_log(f"连续盘已收市 ({close:%Y-%m-%d %H:%M %Z})，撤走全部挂单；{tail}")
 
     def _rearm_protective_stop(self) -> None:
-        """Re-place the exit stop that the restart dropped, before the next bar."""
+        """Re-place the exit stop that a restart — or the close-time cancel — dropped.
+
+        Two producers now set `_rearm_pending`, and they want the same repair:
+        a position is open and nothing is protecting it. Both are resolved on
+        the first continuous-session tick rather than on the next daily bar,
+        which on a daily strategy could otherwise be a whole session away.
+        """
         if not self._rearm_pending:
             return
         if not self.trading or self.pos <= 0:
@@ -224,9 +509,14 @@ class LongOnlyTurtleStrategy(strategy_state.StatefulCtaTemplate):
         if sell_price <= 0:
             return  # nothing trustworthy to arm with; on_bar will rebuild it
 
+        # Both flags move BEFORE the send, not after: send_order is what runs
+        # _ensure_ready, so on_ready can observe them mid-call. Recording the
+        # intent early makes a failed send look like "armed but rejected",
+        # which is what `_rearm_pending = False` already meant here.
         self._rearm_pending = False
+        self._stop_armed = True
         self.sell(sell_price, abs(self.pos), True)
-        self.write_log(f"重启后补挂保护性止损 {sell_price:.3f} x {abs(self.pos):.0f}")
+        self.write_log(f"补挂保护性止损 {sell_price:.3f} x {abs(self.pos):.0f}")
 
     def on_bar(self, bar: BarData) -> None:
         """Whatever the engine feeds us, funnel it to one daily code path.
@@ -236,6 +526,21 @@ class LongOnlyTurtleStrategy(strategy_state.StatefulCtaTemplate):
         BarGenerator built from ticks. Routing both here is what keeps backtest
         and live on the SAME timeframe — previously the backtest ran daily while
         live ran on minutes, so what was validated was not what would trade.
+
+        The session gate that `on_tick` applies is deliberately NOT applied to
+        the minute branch, and the reason is bar labelling rather than
+        squeamishness. A tick timestamp is an instant, so "is this inside the
+        continuous session" has one answer. A bar timestamp is a convention:
+        `VNPY_BAR_LABEL_NORMALIZE` is off by default, so what is in the
+        database is close-labelled, and a bar stamped 16:00 is the 15:59–16:00
+        bar — the last regular minute, and also the one that trips
+        `daily_end`. Gating on the label would delete the close and the day's
+        completion together. The cost of leaving it ungated is that a
+        minute-interval backtest of a US name still ingests extended-hours
+        bars; the honest answer to that is that every window on this strategy
+        is a day count and the daily interval is the validated path, so a
+        minute backtest is measuring something this strategy does not do.
+        Re-examine once bar labels are normalised across the history.
         """
         if bar.interval is Interval.DAILY:
             self.on_daily_bar(bar)
@@ -249,6 +554,7 @@ class LongOnlyTurtleStrategy(strategy_state.StatefulCtaTemplate):
     def on_daily_bar(self, bar: BarData) -> None:
         self._rearm_pending = False   # about to rebuild the full order set anyway
         self.cancel_all()
+        self._stop_armed = False
 
         self.am.update_bar(bar)
         if not self.am.inited:
@@ -279,6 +585,7 @@ class LongOnlyTurtleStrategy(strategy_state.StatefulCtaTemplate):
             # sell stop at the tighter of the ATR stop / 10-day exit channel.
             self.send_buy_orders(self._pyramid_base, bar.close_price)
             sell_price: float = max(self.long_stop, self.exit_down)
+            self._stop_armed = True
             self.sell(sell_price, abs(self.pos), True)
 
         self.put_event()
@@ -384,18 +691,100 @@ class LongOnlyTurtleStrategy(strategy_state.StatefulCtaTemplate):
             return None
         return stop
 
+    def _contract(self) -> ContractData | None:
+        """The OMS record for this symbol, or None when there is no OMS.
+
+        `cta_engine` is a BacktestingEngine in a backtest and a CtaEngine live;
+        only the second one owns a `main_engine`, and only a live MainEngine
+        has `get_contract` (OmsEngine assigns it onto MainEngine in
+        `init_engines`, so it is an attribute rather than a method and a
+        `hasattr` check is the honest way to ask). Everything here therefore
+        has to work with None, which is also the state of a live session in the
+        seconds before the gateway finishes querying instruments.
+        """
+        main_engine = getattr(self.cta_engine, "main_engine", None)
+        if main_engine is None:
+            return None
+        getter = getattr(main_engine, "get_contract", None)
+        if getter is None:
+            return None
+        contract: ContractData | None = getter(self.vt_symbol)
+        return contract
+
+    def _resolve_board_lot(self) -> tuple[int, str]:
+        """Shares per lot, and where the number came from.
+
+        The contract wins. Both gateways already publish the real figure — HK
+        lines come back with `min_volume` 100/500/1000/2000 and US lines with
+        1 — and a parameter that the operator has to remember to change per
+        market is the shape of bug that only shows up on the market nobody
+        tested. `size` is deliberately not consulted: it is 1 on both gateways
+        by design (see vnpy_futu/futu_mapping.py's `size` vs `min_volume`
+        note), and the risk gates multiply by it.
+
+        `min_volume` is a float on ContractData, so it is validated with
+        `math.isfinite` before rounding: a NaN would make `lot <= 0` False and
+        the refusal would inverse into "size the position off a NaN lot".
+
+        The cost of contract-wins, stated: ReplayGateway builds ContractData
+        without touching `min_volume` (vnpy_replay/gateway.py:242-251), so it
+        reports the ContractData default of 1 and an HK symbol under replay
+        will be sized in single shares. That is left alone rather than papered
+        over with `max(contract_lot, board_lot)` — the max would silently let a
+        stale HK parameter override a genuine US contract, trading a
+        read-only-path artifact for a live-path one. The replay gateway is the
+        place to fix it, once it has a lot-size source to fix it from.
+        """
+        contract: ContractData | None = self._contract()
+        if contract is not None:
+            lot: float = float(contract.min_volume)
+            if math.isfinite(lot) and lot >= 1.0:
+                return int(lot), f"合约 {self.vt_symbol}"
+        return int(self.board_lot), "参数 board_lot（未取到合约）"
+
+    def _board_lot(self) -> int:
+        """The lot in force, logging once whenever its provenance changes.
+
+        One line at startup, and one more only if the answer actually moves —
+        the operator needs to be able to see "港股每手 100 来自合约" versus
+        "每手 1 来自参数" without reading four hundred identical lines.
+        """
+        lot, source = self._resolve_board_lot()
+        if source != self._lot_source:
+            self._lot_source = source
+            self.write_log(f"每手股数 {lot}，来源：{source}")
+        return lot
+
     def _compute_unit(self) -> int:
         """Turtle unit size in shares: risk risk_percent of capital per 1N
         move, rounded down to whole board lots. For a stock, $ volatility per
         share is N (1 price point = $1/share). Returns 0 when capital can't
         cover even one lot — the strategy then simply doesn't enter (no
-        sub-lot orders)."""
-        if self.atr_value <= 0 or self.board_lot <= 0:
+        sub-lot orders).
+
+        The lot comes from the contract when there is one, so the same
+        parameters size 300 shares on an HK line and 333 on a US line without
+        the operator touching anything. `effective_lot` is written here rather
+        than in on_bar because this is the only place that needs it, and it is
+        a derived var so the GUI shows which lot actually applied.
+
+        `atr_value` is checked with `math.isfinite` and not with a bare
+        comparison. NaN makes every comparison False, so the old `if
+        atr_value <= 0: return 0` fell through on a NaN and then raised
+        ValueError out of `int(nan // lot)` — inside on_daily_bar, i.e. it took
+        the whole bar handler (and with it `cancel_all` and the protective
+        sell) down rather than declining to size.
+        """
+        lot: int = self._board_lot()
+        self.effective_lot = lot
+        if lot <= 0:
+            return 0
+        if not math.isfinite(self.atr_value) or self.atr_value <= 0.0:
             return 0
         risk_budget: float = self.trading_capital * self.risk_percent / 100.0
         raw_shares: float = risk_budget / self.atr_value
-        lots: int = int(raw_shares // self.board_lot)
-        return lots * self.board_lot
+        lots: int = int(raw_shares // lot)
+        return lots * lot
 
     def send_buy_orders(self, price: float, market_price: float = 0.0) -> None:
         """Place up to max_units buy stops, staggered by 0.5N, each one unit —

@@ -39,10 +39,11 @@ known-first-party = [
 
 # mypy: 对本仓代码严格，对没有类型信息的第三方包如实降级。
 #
-# 这不是给自己的错误开后门 —— 下面五个包全部来自 site-packages 且不带
+# 这不是给自己的错误开后门 —— 下面六个包全部来自 site-packages 且不带
 # py.typed(pyqtgraph / qfluentwidgets 是第三方；vnpy_chartwizard /
-# vnpy_ctabacktester / vnpy_datamanager 是上游 vnpy 的 app 包)。mypy 对它们
-# 只能推出 Any，--strict 于是连带报 disallow_subclassing_any 与 has-type。
+# vnpy_ctabacktester / vnpy_datamanager / vnpy_paperaccount 是上游 vnpy 的
+# app 包)。mypy 对它们只能推出 Any，--strict 于是连带报
+# disallow_subclassing_any 与 has-type。
 # 我们自己的包不在此列：给 vnpy_ctastrategy 等 8 个仓补上 py.typed 之后，
 # 它们已经从 import-untyped 名单里消失了 —— 那才是这类问题的正解。
 [tool.mypy]
@@ -56,6 +57,7 @@ module = [
     "vnpy_chartwizard.*",
     "vnpy_ctabacktester.*",
     "vnpy_datamanager.*",
+    "vnpy_paperaccount.*",
 ]
 ignore_missing_imports = true
 

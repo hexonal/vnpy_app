@@ -49,6 +49,7 @@ from .chart_wizard import ChartWizardWidget as FluentChartWizardWidget
 from .contract_manager import ContractManager
 from .data_manager import ManagerWidget as FluentDataManagerWidget
 from .home_widget import HomeWidget
+from .paper_account import PaperAccountWidget as FluentPaperAccountWidget
 
 # Keyed by BaseApp.app_name (e.g. "CtaStrategy", not the Chinese
 # display_name) so it survives locale changes. Every currently-installed
@@ -71,6 +72,10 @@ APP_ICONS: dict[str, object] = {
 APP_WIDGET_OVERRIDES: dict[str, type] = {
     "DataManager": FluentDataManagerWidget,
     "ChartWizard": FluentChartWizardWidget,
+    # PaperAccount's stock widget setFixedWidth(500)/setFixedHeight(200)s itself
+    # — sized for a floating child window under stock vnpy, and a refusal of the
+    # full page addSubInterface() hands it here. See paper_account.py.
+    "PaperAccount": FluentPaperAccountWidget,
 }
 
 

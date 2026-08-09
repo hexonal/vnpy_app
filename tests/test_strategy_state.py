@@ -10,6 +10,14 @@ Two groups:
     position produces byte-identical orders. Only json persistence is
     redirected into a temp directory.
 
+The US fixture symbol is MU.SMART, not MU.NASDAQ. LongOnlyTurtleStrategy now
+refuses any exchange that vnpy_gatewaykit.sessions has no window table for,
+and SMART is what both live US paths actually stamp (vnpy_futu and vnpy_usmart
+alike, and it is what the QuestDB rows carry). NASDAQ was never routable in
+this fork — no gateway emits it — so the old fixture was exercising state
+restore against a market that cannot occur, which is also why nobody noticed
+the strategy had no session handling.
+
 Run:  .venv/bin/python tests/test_strategy_state.py     (or via pytest)
 """
 
@@ -35,6 +43,7 @@ from vnpy.trader.event import EVENT_TRADE
 from vnpy.trader.object import BarData, ContractData, TickData, TradeData
 from vnpy_ctastrategy.base import EngineType
 from vnpy_ctastrategy.engine import CtaEngine
+from vnpy_gatewaykit.market_clock import market_tz
 
 import strategy_state
 from strategies.long_only_turtle_strategy import LongOnlyTurtleStrategy
@@ -225,7 +234,7 @@ def make_sample(
     """Build a strategy on the stub engine. Returns Any: the tests drive
     several unrelated strategy classes through this one factory."""
     engine = _StubEngine()
-    strat = cls(engine, name, "MU.NASDAQ", setting)
+    strat = cls(engine, name, "MU.SMART", setting)
     strat.on_init()
     return strat, engine
 
@@ -452,7 +461,7 @@ def test_backtest_engine_never_writes_state_file() -> None:
     with _TempState() as ts:
         engine = _StubEngine()
         engine.engine_type = EngineType.BACKTESTING
-        strat = SampleStrategy(engine, "bt", "MU.NASDAQ", {})
+        strat = SampleStrategy(engine, "bt", "MU.SMART", {})
         strat.on_init()
         strat.inited = True
         strat.hidden = 999.0
@@ -477,7 +486,7 @@ def test_sidecar_is_bound_to_class_and_symbol() -> None:
         check("a sidecar from another class is ignored", fresh.hidden == 2.5, f"got {fresh.hidden}")
 
         payload["class_name"] = "SampleStrategy"
-        payload["vt_symbol"] = "NVDA.NASDAQ"
+        payload["vt_symbol"] = "NVDA.SMART"
         ts.sidecar("bound").write_text(json.dumps(payload))
         fresh2, _ = make_sample(name="bound")
         fresh2.inited = True
@@ -640,7 +649,7 @@ _SETTING = dict(
 
 def _bar(i: int, o: float, h: float, low: float, c: float) -> BarData:
     return BarData(
-        symbol="MU", exchange=Exchange.NASDAQ, datetime=_START + timedelta(days=i),
+        symbol="MU", exchange=Exchange.SMART, datetime=_START + timedelta(days=i),
         interval=Interval.DAILY, volume=1_000_000, turnover=1e8, open_interest=0,
         open_price=o, high_price=h, low_price=low, close_price=c, gateway_name="TEST",
     )
@@ -672,7 +681,7 @@ class _LiveRig:
         self.cta_engine.classes["LongOnlyTurtleStrategy"] = LongOnlyTurtleStrategy
         self.cta_engine.load_strategy_data()
         contract = ContractData(
-            symbol="MU", exchange=Exchange.NASDAQ, name="MU", product=Product.EQUITY,
+            symbol="MU", exchange=Exchange.SMART, name="MU", product=Product.EQUITY,
             size=1, pricetick=0.01, min_volume=1, stop_supported=False,
             net_position=True, gateway_name="TEST",
         )
@@ -685,7 +694,7 @@ class _LiveRig:
         # strategies are inited; reload here so a rig created up front still
         # sees what an earlier session wrote.
         self.cta_engine.load_strategy_data()
-        self.cta_engine.add_strategy("LongOnlyTurtleStrategy", name, "MU.NASDAQ", dict(_SETTING))
+        self.cta_engine.add_strategy("LongOnlyTurtleStrategy", name, "MU.SMART", dict(_SETTING))
         self.cta_engine.load_bar = lambda *a, **k: list(history)
         self.cta_engine._init_strategy(name)
         self.cta_engine.start_strategy(name)
@@ -717,7 +726,7 @@ class _LiveRig:
     ) -> None:
         self._trade_id += 1
         trade = TradeData(
-            symbol="MU", exchange=Exchange.NASDAQ, orderid=f"o{self._trade_id}",
+            symbol="MU", exchange=Exchange.SMART, orderid=f"o{self._trade_id}",
             tradeid=f"t{self._trade_id}", direction=direction, offset=offset,
             price=price, volume=volume, datetime=when, gateway_name="TEST",
         )
@@ -937,9 +946,18 @@ def test_protective_stop_is_rearmed_on_the_first_tick_after_restart() -> None:
                   restarted.stops(Direction.SHORT) == [] and restarted.stops(Direction.LONG) == [])
             check("on_ready flagged the position for re-arming", strat_b._rearm_pending is True)
 
+            # The tick has to be an aware instant inside the US continuous
+            # session, because the strategy now admits REGULAR ticks only. Two
+            # traps in the old fixture: the bar datetimes here are naive (a
+            # naive tick carries no instant and is dropped), and their 16:00
+            # reading is the continuous close, which the half-open [09:30,
+            # 16:00) window puts OUTSIDE the session rather than at its edge.
             tick = TickData(
-                symbol="MU", exchange=Exchange.NASDAQ, name="MU",
-                datetime=bars[106].datetime, last_price=105.9, gateway_name="TEST",
+                symbol="MU", exchange=Exchange.SMART, name="MU",
+                datetime=bars[106].datetime.replace(
+                    hour=10, minute=30, tzinfo=market_tz(Exchange.SMART)
+                ),
+                last_price=105.9, gateway_name="TEST",
             )
             strat_b.on_tick(tick)
 
@@ -1018,7 +1036,7 @@ def test_runs_unchanged_under_the_backtesting_engine() -> None:
     with _TempState() as ts:
         engine = BacktestingEngine()
         engine.set_parameters(
-            vt_symbol="MU.NASDAQ",
+            vt_symbol="MU.SMART",
             interval=Interval.DAILY,
             start=_START,
             end=_START + timedelta(days=200),
@@ -1051,8 +1069,13 @@ def test_gui_payload_stays_small_while_state_is_complete() -> None:
                 live.feed(strat, bar)
 
             gui = strat.get_data()["variables"]
-            check("GUI shows the 7 operator fields plus the 3 base ones",
-                  len(gui) == 10, f"got {sorted(gui)}")
+            # 8 operator fields: 6 display_vars plus the 2 derived ones
+            # (exit_down, effective_lot). effective_lot is on the panel on
+            # purpose — it is how an operator sees whether the 每手股数 in force
+            # came from the contract (港股 100) or from the fallback parameter,
+            # which is the difference between a correct order and an odd lot.
+            check("GUI shows the 8 operator fields plus the 3 base ones",
+                  len(gui) == 11, f"got {sorted(gui)}")
             check("GUI does not show the internal bookkeeping",
                   not any(k.startswith("_") for k in gui), f"got {sorted(gui)}")
             check("persistence still covers the internal bookkeeping",

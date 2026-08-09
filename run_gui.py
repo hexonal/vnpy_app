@@ -61,6 +61,7 @@ from fluent_ui import FluentMainWindow, create_fluent_qapp
 from fluent_ui.backtester_data_check import install_data_check
 from fluent_ui.backtester_gates import install_gate_verdict
 from fluent_ui.backtester_metrics import install_extra_metrics
+from fluent_ui.backtester_param_labels import install_param_labels
 from fluent_ui.backtester_segments import install_segment_notice
 from fluent_ui.backtester_strategy_labels import install_strategy_labels
 from fluent_ui.backtester_symbol_search import install_symbol_search
@@ -226,6 +227,13 @@ def main() -> None:
     searchable = install_symbol_search()
     if searchable:
         main_engine.write_log(f"回测本地代码已接入合约搜索: {', '.join(searchable)}")
+
+    # 「开始回测」「参数优化」点下去弹出的那两个参数框，上游把 `f"{name} {type_}"`
+    # 直接当标签用 —— 屏幕上是 `atr_length <class 'int'>`。这两个框不必赶在主窗口
+    # 之前接（它们是点按钮时才 new 出来的），放在这里只是让回测器的接管集中成一段。
+    param_labelled = install_param_labels()
+    if param_labelled:
+        main_engine.write_log(f"回测参数框中文名已挂钩: {', '.join(param_labelled)}")
 
     data_checked = install_data_check()
     if data_checked:
