@@ -330,10 +330,17 @@ def test_an_empty_private_key_path_is_refused(keys: tuple[Path, Path]) -> None:
 def test_a_pem_that_openssl_cannot_parse_is_refused(
     keys: tuple[Path, Path], tmp_path: Path
 ) -> None:
-    """一个存在但内容是垃圾的文件,是这道闸和「文件存在吗」那道闸的分界。"""
+    """一个存在但内容是垃圾的文件,是这道闸和「文件存在吗」那道闸的分界。
+
+    PEM 头拼出来而不是写成整段字面量,是 test_no_tracked_credentials.py 点名
+    要求的写法:那道闸对 PEM 头【不设任何豁免通道】,因为唯一可能的豁免判据是
+    「所在文件看着像测试」,而测试文件恰恰是最常见的泄漏点。代价就落在这种
+    「需要一个假 PEM 头」的用例上,出路是这一行而不是豁免名单。
+    """
     _, pub_file = keys
     junk = tmp_path / "junk.pem"
-    junk.write_text("-----BEGIN RSA PRIVATE KEY-----\nnot base64\n", encoding="UTF-8")
+    header = "-----" + "BEGIN RSA PRIVATE KEY" + "-----"
+    junk.write_text(f"{header}\nnot base64\n", encoding="UTF-8")
 
     result = validate_setting(make_setting(junk, pub_file))
 
