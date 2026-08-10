@@ -14,13 +14,13 @@ from collections.abc import Callable
 from functools import partial
 
 from qfluentwidgets import Action as FluentAction
-from qfluentwidgets import PushButton, RoundMenu
+from qfluentwidgets import PushButton, RoundMenu, StrongBodyLabel
 from vnpy.event import EventEngine
 from vnpy.trader.engine import MainEngine
 from vnpy.trader.locale import _
 from vnpy.trader.ui import QtCore, QtWidgets
 
-from .connect_dialog import ConnectDialog
+from .connect_dialog import ConnectDialog, paint_environment_banner
 from .monitor import (
     AccountMonitor,
     ActiveOrderMonitor,
@@ -33,6 +33,7 @@ from .monitor import (
 )
 from .pivot_widget import PivotWidgdet
 from .trading_widget import TradingWidget
+from .usmart_profiles import USMART_GATEWAY_NAME
 
 
 class HomeWidget(QtWidgets.QWidget):
@@ -60,6 +61,13 @@ class HomeWidget(QtWidgets.QWidget):
         self.menu_button = PushButton(_("连接网关"))
         self.menu_button.clicked.connect(self.show_menu)
 
+        # uSMART 当前环境的常驻指示器。放在下单面板正下方而不是塞进连接对话
+        # 框里就算完:对话框关掉之后没人再看得见环境是什么,而下错单的那一刻
+        # 人正盯着的是下单面板。装了 uSMART 才显示,见 refresh_usmart_env。
+        self.usmart_env_label = StrongBodyLabel("")
+        self.usmart_env_label.setWordWrap(True)
+        self.refresh_usmart_env()
+
         mid_pivot = PivotWidgdet(self)
         mid_pivot.add_widget(self.active_monitor, _("活动委托"))
         mid_pivot.add_widget(self.order_monitor, _("全部委托"))
@@ -77,6 +85,7 @@ class HomeWidget(QtWidgets.QWidget):
         vbox2.setContentsMargins(0, 0, 0, 0)
         vbox2.addWidget(self.trading_widget)
         vbox2.addWidget(self.menu_button)
+        vbox2.addWidget(self.usmart_env_label)
         vbox2.addStretch()
 
         # Right column: the three monitor sections stacked in a VERTICAL
@@ -131,9 +140,27 @@ class HomeWidget(QtWidgets.QWidget):
         pos = self.menu_button.mapToGlobal(QtCore.QPoint(self.menu_button.width() + 5, 0))
         self.menu.exec(pos, ani=True)
 
+    def refresh_usmart_env(self) -> None:
+        """常驻指示器的唯一刷新入口。
+
+        没装 uSMART 网关就整个隐藏 —— 给一个没有 uSMART 的终端挂一句「环境:
+        未知」只会训练使用者忽略这一行,而这一行存在的全部价值就是它平时不该
+        被忽略。
+        """
+        names = {name.upper() for name in self.main_engine.get_all_gateway_names()}
+        if USMART_GATEWAY_NAME not in names:
+            self.usmart_env_label.hide()
+            return
+
+        paint_environment_banner(self.usmart_env_label)
+        self.usmart_env_label.show()
+
     def connect_gateway(self, gateway_name: str) -> None:
         dialog = ConnectDialog(self.main_engine, gateway_name, self)
         dialog.exec()
+
+        # 对话框里可能刚切过环境(或者刚用新配置连上),指示器必须跟着走。
+        self.refresh_usmart_env()
 
     def get_monitors(self) -> list[BaseMonitor]:
         """

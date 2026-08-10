@@ -6,3 +6,11 @@ __pycache__/
 .DS_Store
 *.log
 .mcp.json
+
+# 凭据与本地运行时产物：进了索引就等于公开，而 git 历史不由 AI 清理
+.env
+.env.*
+*.pem
+*.key
+connect_*.json
+.claude/
