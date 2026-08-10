@@ -29,6 +29,14 @@ from vnpy.trader.ui import QtCore, QtGui, QtWidgets
 from vnpy.trader.utility import get_digits
 
 from .cells import BaseCell
+from .order_feedback import (
+    Acceptance,
+    StopEntry,
+    confirm_accepted,
+    explain_empty_orderid,
+    manual_reference,
+    read_stop,
+)
 
 
 class TradingWidget(QtWidgets.QWidget):
@@ -76,6 +84,20 @@ class TradingWidget(QtWidgets.QWidget):
         self.volume_line = LineEdit()
         self.volume_line.setValidator(double_validator)
 
+        # The panel has to be able to declare a stop, because the gate on
+        # main_engine.send_order (强制止损检查) refuses every exposure-
+        # increasing order that does not carry one. The alternative — having
+        # the widget synthesise a stop from the entry price so the order gets
+        # through — was rejected: that number goes straight into the risk
+        # sizing (|entry-stop| x volume x size) and no human ever chose it.
+        # An empty box stays legal: exits need no stop, and an opening order
+        # left blank is refused *and told why* (see order_feedback).
+        self.stop_line = LineEdit()
+        self.stop_line.setValidator(double_validator)
+        self.stop_line.setToolTip(
+            _("增仓委托必填：风控的「强制止损检查」要求增敞口委托声明止损价；平仓可留空")
+        )
+
         self.gateway_combo = EditableComboBox()
         self.gateway_combo.addItems(self.main_engine.get_all_gateway_names())
 
@@ -97,7 +119,8 @@ class TradingWidget(QtWidgets.QWidget):
         grid.addWidget(QtWidgets.QLabel(_("类型")), 5, 0)
         grid.addWidget(QtWidgets.QLabel(_("价格")), 6, 0)
         grid.addWidget(QtWidgets.QLabel(_("数量")), 7, 0)
-        grid.addWidget(QtWidgets.QLabel(_("接口")), 8, 0)
+        grid.addWidget(QtWidgets.QLabel(_("止损价")), 8, 0)
+        grid.addWidget(QtWidgets.QLabel(_("接口")), 9, 0)
         grid.addWidget(self.exchange_combo, 0, 1, 1, 2)
         grid.addWidget(self.symbol_line, 1, 1, 1, 2)
         grid.addWidget(self.name_line, 2, 1, 1, 2)
@@ -107,9 +130,10 @@ class TradingWidget(QtWidgets.QWidget):
         grid.addWidget(self.price_line, 6, 1, 1, 1)
         grid.addWidget(self.price_check, 6, 2, 1, 1)
         grid.addWidget(self.volume_line, 7, 1, 1, 2)
-        grid.addWidget(self.gateway_combo, 8, 1, 1, 2)
-        grid.addWidget(send_button, 9, 0, 1, 3)
-        grid.addWidget(cancel_button, 10, 0, 1, 3)
+        grid.addWidget(self.stop_line, 8, 1, 1, 2)
+        grid.addWidget(self.gateway_combo, 9, 1, 1, 2)
+        grid.addWidget(send_button, 10, 0, 1, 3)
+        grid.addWidget(cancel_button, 11, 0, 1, 3)
 
         bid_color = "rgb(255,174,201)"
         ask_color = "rgb(160,255,160)"
@@ -252,6 +276,12 @@ class TradingWidget(QtWidgets.QWidget):
         self.clear_label_text()
         self.volume_line.setText("")
         self.price_line.setText("")
+        # A stop price belongs to one instrument. Leaving 400.2 in the box
+        # after switching from 700.SEHK to NBIS.SMART would send a stop that
+        # is nowhere near the new price — the gate would refuse it as "on the
+        # wrong side", and if it happened to land on the right side it would
+        # size the position against a number meant for another symbol.
+        self.stop_line.setText("")
 
         req = SubscribeRequest(symbol=symbol, exchange=Exchange(exchange_value))
         self.main_engine.subscribe(req, gateway_name)
@@ -300,6 +330,11 @@ class TradingWidget(QtWidgets.QWidget):
         price_text = str(self.price_line.text())
         price = float(price_text) if price_text else 0.0
 
+        stop_entry: StopEntry = read_stop(str(self.stop_line.text()))
+        if stop_entry.error:
+            self._show_error(_("委托失败"), stop_entry.error)
+            return
+
         req = OrderRequest(
             symbol=symbol,
             exchange=Exchange(str(self.exchange_combo.currentText())),
@@ -308,11 +343,32 @@ class TradingWidget(QtWidgets.QWidget):
             volume=volume,
             price=price,
             offset=Offset(str(self.offset_combo.currentText())),
-            reference="ManualTrading",
+            reference=manual_reference(stop_entry.stop),
         )
 
         gateway_name = str(self.gateway_combo.currentText())
-        self.main_engine.send_order(req, gateway_name)
+        vt_orderid: str = self.main_engine.send_order(req, gateway_name)
+
+        # The return value used to be discarded outright. Every refusal by the
+        # gate chain therefore looked exactly like a successful order from the
+        # panel: the button clicked, nothing appeared in 委托栏, and the only
+        # trace was one RiskEngine line in the log dock. Both failure shapes
+        # are surfaced here, in the popup this class already had.
+        if not vt_orderid:
+            self._show_error(
+                _("委托被拒"), explain_empty_orderid(req.vt_symbol, req.reference)
+            )
+            return
+
+        # A non-empty id is not proof of acceptance — a gateway that refuses
+        # locally still hands one back. See order_feedback.confirm_accepted.
+        verdict: Acceptance = confirm_accepted(
+            self.main_engine, self.event_engine, vt_orderid
+        )
+        if verdict.refusal:
+            self._show_error(_("委托被拒"), verdict.refusal)
+        elif verdict.warning:
+            self._show_error(_("委托状态未知"), verdict.warning)
 
     def cancel_all(self) -> None:
         for order in self.main_engine.get_all_active_orders():
